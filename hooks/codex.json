@@ -1,0 +1,17 @@
+{
+  "description": "Inject the shared project task board (git worktree snapshot + active tasks) at session start.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "project-state",
+  "version": "0.1.0",
+  "description": "多 worktree、多 AI 会话共用的项目任务交接板。",
+  "skills": "./skills/",
+  "hooks": "./hooks/codex.json"
+}

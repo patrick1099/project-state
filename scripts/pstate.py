@@ -1,0 +1,364 @@
+# 结构: vibe-scripts/standard
+# 用途: 项目级任务交接板——同一仓库的所有 worktree、所有 AI 会话读写同一份任务状态，git 现场自动汇总
+# 用法: py -3 pstate.py status | new <slug> --title <标题> | done <slug> | path | hook（SessionStart 钩子，读 stdin）
+# 原始需求: 缺少项目 todo，多个 worktree、多个 AI（Claude/Codex）先后或同时干活时容易冲突、交接断档。
+#           状态放仓库外本机目录（按 git common dir 识别同一仓库），一个任务一个 .md；
+#           未提交改动等 git 能查到的事实自动汇总，只把目标/停在哪/下一步/阻塞/为什么保留改动留给人和 AI 写；
+#           SessionStart 时自动注入。v1 不做认领锁、不做 Stop 检查。
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+# ===== 1 配置/常量 =====
+STATE_HOME_ENV = "PSTATE_HOME"
+STATE_HOME_DEFAULT = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "state") / "ai-project-state"
+MAX_INJECT = 4000
+STALE_DAYS = 7
+FIELD_WORKTREE = "worktree"
+FIELD_BRANCH = "分支"
+FIELD_STATUS = "状态"
+STATUSES = ("进行中", "阻塞", "待办")
+SLUG_RE = re.compile(r"^[\w.\-]+$")
+
+TASK_TEMPLATE = """# {title}
+
+- {f_wt}: {worktree}
+- {f_br}: {branch}
+- {f_st}: {status}
+
+## 目标
+
+## 停在哪 / 下一步
+
+## 阻塞 / 在等什么
+
+## 保留的未提交改动（为什么不提交、哪些不能覆盖）
+"""
+
+
+# ===== 3 Core：纯逻辑 =====
+def norm(path):
+    return os.path.normcase(os.path.normpath(str(path)))
+
+
+def repo_key(common_dir):
+    """同一仓库（不管从哪个 worktree 进来）得到同一个目录名：主仓目录名 + common dir 路径哈希。"""
+    p = Path(common_dir)
+    root_name = p.parent.name if p.name == ".git" else p.name
+    digest = hashlib.sha1(norm(p).encode("utf-8")).hexdigest()[:8]
+    safe = re.sub(r'[<>:"/\\|?*\s]+', "_", root_name).strip("._") or "repo"
+    return f"{safe}-{digest}"
+
+
+def parse_worktrees(porcelain):
+    """解析 `git worktree list --porcelain`，返回 [{path, head, branch, prunable}]。"""
+    out, cur = [], None
+    for line in porcelain.splitlines():
+        if line.startswith("worktree "):
+            cur = {"path": line[9:], "head": "", "branch": "", "prunable": False}
+            out.append(cur)
+        elif cur is None:
+            continue
+        elif line.startswith("HEAD "):
+            cur["head"] = line[5:12]
+        elif line.startswith("branch "):
+            cur["branch"] = line[7:].removeprefix("refs/heads/")
+        elif line == "detached":
+            cur["branch"] = "(detached)"
+        elif line.startswith("prunable"):
+            cur["prunable"] = True
+    return out
+
+
+def count_changes(porcelain):
+    """`git status --porcelain` → (已跟踪文件改动数, 未跟踪数)。"""
+    tracked = untracked = 0
+    for line in porcelain.splitlines():
+        if line.startswith("??"):
+            untracked += 1
+        elif line.strip():
+            tracked += 1
+    return tracked, untracked
+
+
+def parse_task(text):
+    """任务文件 → {title, fields, sections}。字段是标题下 `- 键: 值` 行，节是 `## ` 标题。"""
+    title, fields, sections, cur = "", {}, {}, None
+    for line in text.splitlines():
+        if cur is None and not title and line.startswith("# "):
+            title = line[2:].strip()
+        elif line.startswith("## "):
+            cur = line[3:].strip()
+            sections[cur] = []
+        elif cur is None:
+            m = re.match(r"^[-*]\s*([^:：]+)[:：]\s*(.*)$", line)
+            if m:
+                fields[m.group(1).strip()] = m.group(2).strip()
+        else:
+            sections[cur].append(line)
+    return {"title": title, "fields": fields,
+            "sections": {k: "\n".join(v).strip() for k, v in sections.items()}}
+
+
+def next_step(task):
+    for name, body in task["sections"].items():
+        if name.startswith("停在哪") or "下一步" in name:
+            first = next((l.strip(" -*") for l in body.splitlines() if l.strip()), "")
+            return first
+    return ""
+
+
+def age_text(seconds):
+    if seconds < 3600:
+        return f"{max(1, int(seconds // 60))} 分钟前"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} 小时前"
+    return f"{int(seconds // 86400)} 天前"
+
+
+def task_line(slug, task, mtime, now, known_wts, current_wt):
+    f = task["fields"]
+    wt = f.get(FIELD_WORKTREE, "")
+    status = f.get(FIELD_STATUS, "?")
+    where = Path(wt).name if wt else "?"
+    if wt and norm(wt) == norm(current_wt):
+        where += "（当前）"
+    notes = [f"{age_text(now - mtime)}更新"]
+    if now - mtime > STALE_DAYS * 86400:
+        notes.append("久未更新，内容可能过期")
+    if wt and norm(wt) not in known_wts:
+        notes.append("工作区已不在 git 登记里，基线待核实")
+    line = f"  - {slug}：{task['title'] or '(无标题)'}  [{status}] @{where}  {'，'.join(notes)}"
+    nxt = next_step(task)
+    return line + (f"\n      下一步：{nxt}" if nxt else "")
+
+
+def render_status(repo_name, state_dir, worktrees, tasks, current_wt, now):
+    """worktrees: [{path, branch, head, prunable, changes:(t,u)|None}]；tasks: [(slug, task, mtime)]。"""
+    lines = [f"[pstate] {repo_name} 的工作现场（任务目录 {state_dir}）", "工作区："]
+    for w in worktrees:
+        mark = "*" if norm(w["path"]) == norm(current_wt) else " "
+        if w["prunable"] or w["changes"] is None:
+            state = "目录不存在或读不了"
+        else:
+            t, u = w["changes"]
+            state = "干净" if not (t or u) else f"改动 {t}，未跟踪 {u}"
+        lines.append(f"  {mark} {w['path']}  [{w['branch']}] {w['head']}  {state}")
+    known = {norm(w["path"]) for w in worktrees if not w["prunable"]}
+    if tasks:
+        lines.append(f"活跃任务（{len(tasks)}）：")
+        lines += [task_line(s, t, m, now, known, current_wt) for s, t, m in tasks]
+    else:
+        lines.append("活跃任务：无")
+    return "\n".join(lines)
+
+
+def render_hook(status_text, current_tasks, cmd):
+    """current_tasks: [(path, text)]，当前 worktree 的任务全文。"""
+    lines = [status_text, ""]
+    total = sum(len(t) for _, t in current_tasks)
+    if current_tasks and total <= MAX_INJECT:
+        lines.append("当前工作区的任务全文：")
+        for path, text in current_tasks:
+            lines += ["", f"--- {path} ---", text.rstrip()]
+        lines.append("")
+    elif current_tasks:
+        lines.append(f"当前工作区的任务合计 {total} 字，没有注入全文，接手前完整读完：")
+        lines += [f"- {p}" for p, _ in current_tasks]
+        lines.append("")
+    lines += [
+        "这是本仓库所有 worktree、所有 AI 会话共用的任务交接板（pstate）。用法：",
+        "- 用户要做的事对应上面某个任务，就接着那个任务干，先读它的全文；别在别的工作区的任务上动手，除非用户明说。",
+        "- 有实质进展、要停下、要交接时，直接编辑该任务 .md 的「停在哪 / 下一步」等节（普通 .md，用文件编辑工具）；",
+        "  保留的未提交改动要写清为什么不提交、哪些不能覆盖。git 能查到的改动清单不用抄。",
+        f"- 新开一件要跨会话的活：{cmd} new <英文短名> --title <标题>；做完：{cmd} done <短名>；看现场：{cmd} status",
+        "- 进度和交接只写在这里，不写进记忆；记忆只放长期有效的结论和教训。",
+    ]
+    return "\n".join(lines)
+
+
+def new_task_text(title, worktree, branch, status):
+    return TASK_TEMPLATE.format(title=title, worktree=worktree, branch=branch, status=status,
+                                f_wt=FIELD_WORKTREE, f_br=FIELD_BRANCH, f_st=FIELD_STATUS)
+
+
+# ===== 4 Adapter：git 与文件 =====
+def git(args, cwd):
+    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip() or f"git {' '.join(args)} 失败")
+    return r.stdout
+
+
+def repo_context(cwd):
+    """返回 (common_dir, 当前 worktree 根, 当前分支)；不在 git 仓库里抛 RuntimeError。"""
+    common = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd).strip()
+    top = git(["rev-parse", "--show-toplevel"], cwd).strip()
+    branch = git(["branch", "--show-current"], cwd).strip() or "(detached)"
+    return common, top, branch
+
+
+def collect_worktrees(cwd):
+    wts = parse_worktrees(git(["worktree", "list", "--porcelain"], cwd))
+    for w in wts:
+        w["changes"] = None
+        if not w["prunable"] and Path(w["path"]).is_dir():
+            try:
+                w["changes"] = count_changes(git(["status", "--porcelain"], w["path"]))
+            except RuntimeError:
+                pass
+    return wts
+
+
+def state_home():
+    return Path(os.environ.get(STATE_HOME_ENV) or STATE_HOME_DEFAULT)
+
+
+def state_dir_for(common_dir):
+    return state_home() / repo_key(common_dir)
+
+
+def ensure_state_dir(common_dir):
+    d = state_dir_for(common_dir)
+    (d / "tasks").mkdir(parents=True, exist_ok=True)
+    info = d / "repo.txt"
+    if not info.exists():
+        info.write_text(f"git common dir: {common_dir}\n", encoding="utf-8")
+    return d
+
+
+def load_tasks(state_dir):
+    tasks = []
+    for p in sorted((state_dir / "tasks").glob("*.md")):
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        tasks.append((p.stem, p, text, p.stat().st_mtime))
+    return tasks
+
+
+def self_cmd():
+    return f'py -3 "{Path(__file__).resolve()}"'
+
+
+# ===== 5 App：命令表 + CLI 入口 =====
+def build_status(cwd):
+    common, top, _ = repo_context(cwd)
+    sdir = state_dir_for(common)
+    raw = load_tasks(sdir) if (sdir / "tasks").is_dir() else []
+    parsed = [(s, parse_task(t), m) for s, _, t, m in raw]
+    text = render_status(Path(common).parent.name if Path(common).name == ".git" else Path(common).name,
+                         sdir, collect_worktrees(cwd), parsed, top, time.time())
+    return text, raw, parsed, top
+
+
+def cmd_status(args):
+    text, *_ = build_status(args.cwd)
+    print(text)
+    return 0
+
+
+def cmd_new(args):
+    if not SLUG_RE.match(args.slug):
+        print(f"短名只能用字母、数字、下划线、点、横线：{args.slug}", file=sys.stderr)
+        return 2
+    common, top, branch = repo_context(args.cwd)
+    p = ensure_state_dir(common) / "tasks" / f"{args.slug}.md"
+    if p.exists():
+        print(f"任务已存在：{p}", file=sys.stderr)
+        return 1
+    p.write_text(new_task_text(args.title, top, branch, args.status), encoding="utf-8")
+    print(p)
+    return 0
+
+
+def cmd_done(args):
+    common, _, _ = repo_context(args.cwd)
+    sdir = state_dir_for(common)
+    src = sdir / "tasks" / f"{args.slug}.md"
+    if not src.exists():
+        print(f"没有这个任务：{src}", file=sys.stderr)
+        return 1
+    dst = sdir / "done" / f"{time.strftime('%Y%m%d')}-{args.slug}.md"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    src.replace(dst)
+    print(dst)
+    return 0
+
+
+def cmd_path(args):
+    common, _, _ = repo_context(args.cwd)
+    print(ensure_state_dir(common))
+    return 0
+
+
+def cmd_hook(args):
+    data = json.loads(sys.stdin.read() or "{}")
+    cwd = data.get("cwd") or os.getcwd()
+    if not os.path.isdir(cwd):
+        return 0
+    try:
+        text, raw, parsed, top = build_status(cwd)
+    except RuntimeError:
+        return 0
+    if not raw:
+        return 0
+    current = [(p, t) for (_, p, t, _), (_, task, _) in zip(raw, parsed)
+               if norm(task["fields"].get(FIELD_WORKTREE, "")) == norm(top)]
+    ctx = render_hook(text, current, self_cmd())
+    event = data.get("hook_event_name") or "SessionStart"
+    sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": ctx}},
+                                ensure_ascii=False))
+    return 0
+
+
+COMMANDS = {"status": cmd_status, "new": cmd_new, "done": cmd_done, "path": cmd_path, "hook": cmd_hook}
+
+
+def build_parser():
+    ap = argparse.ArgumentParser(prog="pstate", description="项目级任务交接板")
+    ap.add_argument("--cwd", default=os.getcwd(), help="从哪个目录识别仓库（默认当前目录）")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("status", help="工作区现场 + 活跃任务")
+    p = sub.add_parser("new", help="新建任务文件，打印路径")
+    p.add_argument("slug")
+    p.add_argument("--title", required=True)
+    p.add_argument("--status", choices=STATUSES, default="进行中")
+    p = sub.add_parser("done", help="任务移出活跃视图（移到 done/）")
+    p.add_argument("slug")
+    sub.add_parser("path", help="打印本仓库的任务目录")
+    sub.add_parser("hook", help="SessionStart 钩子：读 stdin JSON，有活跃任务才输出")
+    return ap
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    try:
+        return COMMANDS[args.cmd](args)
+    except RuntimeError as e:
+        if args.cmd == "hook":
+            return 0
+        print(f"不在 git 仓库里，或 git 调用失败：{e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    for s in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+    try:
+        sys.exit(main())
+    except Exception as e:
+        sys.stderr.write(f"pstate 内部错误：{e!r}\n")
+        sys.exit(0 if len(sys.argv) > 1 and sys.argv[1] == "hook" else 1)

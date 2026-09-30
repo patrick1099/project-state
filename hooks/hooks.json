@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if command -v py >/dev/null 2>&1; then py -3 \"${CLAUDE_PLUGIN_ROOT}/scripts/pstate.py\" hook; else python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/pstate.py\" hook; fi",
+            "shell": "bash",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

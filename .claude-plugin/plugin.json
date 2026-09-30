@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "project-state",
+  "displayName": "project-state 项目任务交接板",
+  "version": "0.1.0",
+  "description": "同一仓库的所有 worktree、所有 AI 会话(Claude Code / Codex)共用一块任务交接板:任务状态放仓库外本机目录(%LOCALAPPDATA%/ai-project-state/<仓库>/,按 git common dir 识别),一个任务一个 .md;未提交改动等 git 能查到的事实每次现场汇总,只把目标、停在哪、下一步、阻塞、为什么保留改动留给人和 AI 写。SessionStart 时有活跃任务才注入现场和当前工作区的任务全文,没有就静默。v1 不做认领锁、不做收尾检查。",
+  "author": { "name": "xu" },
+  "homepage": "https://github.com/patrick1099/project-state",
+  "repository": "https://github.com/patrick1099/project-state",
+  "keywords": ["handoff", "todo", "worktree", "multi-agent", "session-start", "project-state"]
+}
