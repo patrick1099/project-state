@@ -1,11 +1,20 @@
 ---
 name: pstate
-description: 项目任务交接板（pstate）——同一 git 仓库的所有 worktree、所有 AI 会话（Claude Code / Codex）共用的待办与交接。Use when the user says 交接 / handoff / 记一下进度 / 记个待办 / todo / 下次接着做 / 收工 / 换个会话继续 / 让别的 AI 接手 / 现在都有哪些活 / 别的 worktree 在干什么；when a task will span sessions or worktrees; when stopping mid-task with uncommitted changes that must be kept; or when a SessionStart injection shows a "[pstate]" board. 进度和交接写这里，不写进记忆。
+description: 项目任务交接板（pstate）——同一 git 仓库的所有 worktree、所有 AI 会话（Claude Code / Codex）共用的待办与交接。Use when the user says 交接 / handoff / 记一下进度 / 记个待办 / todo / 下次接着做 / 收工 / 换个会话继续 / 让别的 AI 接手 / 现在都有哪些活 / 别的 worktree 在干什么；when a task will span sessions or worktrees; when stopping mid-task with uncommitted changes that must be kept; or when a SessionStart injection shows a "[pstate]" board. Not for projects that keep a vibe-flow HANDOFF.md — their progress stays in HANDOFF. 没有 HANDOFF 的仓库（公司仓等），进度和交接写这里；都不写进记忆。
 ---
 
 # pstate：项目任务交接板
 
 记忆存长期有效的结论和教训；**pstate 存"现在"**：谁在哪个工作区做什么、停在哪、下一步、在等什么、哪些未提交改动为什么要留着。一件事做完就移出活跃视图，不攒历史。
+
+## 和别处怎么分：同一件事的进度只记一处
+
+| 地方 | 管什么 |
+|---|---|
+| 项目的 `HANDOFF.md`（vibe-flow 的个人项目） | 这个项目做到哪、下一步、谈定的约定。有它就只写它，**不在 pstate 另建任务** |
+| **pstate** | 没有 HANDOFF 的仓库（公司固件仓等）里跨会话、跨 worktree、要留未提交改动的活 |
+| 平台原生记忆、hub 金库 | 只存长期结论和教训，**不记进度**。看到进度类记忆，以 git log 和上面两处为准，删掉或改成指针 |
+| session-sweep（Obsidian「悬着的事」） | 只是发现入口：从它那里捡起一件事，进度落回上面两处之一，不在它那里维护 |
 
 ## 数据在哪
 
@@ -26,7 +35,7 @@ description: 项目任务交接板（pstate）——同一 git 仓库的所有 w
 
 ## 什么时候写
 
-- **开新的跨会话活**：用户要做的事一个会话做不完、会换 AI 接手，或要留未提交改动等评估时，`new` 一个任务。一问一答、当场做完的小事不用建。
+- **开新的跨会话活——AI 主动建，不等用户说"记个任务"**：在没有 HANDOFF 的仓库里，判断出要做的事一个会话做不完、会换 AI 接手，或要留未提交改动等评估时，当场 `new` 一个任务，并在回复里告诉用户一句建了什么。一问一答、当场做完的小事不用建。
 - **有实质进展、要停下、要交接时**：直接编辑任务文件（普通 `.md`，用文件编辑工具），更新这几节：
   - `## 目标`：一两句话，用户要的结果。
   - `## 停在哪 / 下一步`：**第一行写下一步**，看板只显示这一行。零上下文的接手者读完要能直接开工。
