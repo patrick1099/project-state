@@ -1,14 +1,16 @@
 {
   "name": "project-state",
-  "owner": { "name": "xu" },
+  "owner": {
+    "name": "xu"
+  },
   "metadata": {
-    "description": "project-state 项目任务交接板"
+    "description": "project-state 会话互斥锁与待办看板"
   },
   "plugins": [
     {
       "name": "project-state",
       "source": ".",
-      "description": "多 worktree、多 AI 会话共用的项目任务交接板:SessionStart 注入 git 现场与活跃任务"
+      "description": "个人项目的会话互斥锁(写前拦截、跨 worktree)+ 待办看板"
     }
   ]
 }

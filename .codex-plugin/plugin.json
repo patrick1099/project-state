@@ -1,7 +1,7 @@
 {
   "name": "project-state",
-  "version": "0.1.1",
-  "description": "多 worktree、多 AI 会话共用的项目任务交接板。",
+  "version": "0.2.0",
+  "description": "个人项目的会话互斥锁 + 待办看板(Codex 侧 v0.2 只有会话开始注入看板,锁未适配)。",
   "skills": "./skills/",
   "hooks": "./hooks/codex.json"
 }

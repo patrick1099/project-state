@@ -1,51 +1,61 @@
 ---
 name: pstate
-description: 项目任务交接板（pstate）——同一 git 仓库的所有 worktree、所有 AI 会话（Claude Code / Codex）共用的待办与交接。Use when the user says 交接 / handoff / 记一下进度 / 记个待办 / todo / 下次接着做 / 收工 / 换个会话继续 / 让别的 AI 接手 / 现在都有哪些活 / 别的 worktree 在干什么；when a task will span sessions or worktrees; when stopping mid-task with uncommitted changes that must be kept; or when a SessionStart injection shows a "[pstate]" board. Not for projects that keep a vibe-flow HANDOFF.md — their progress stays in HANDOFF. 没有 HANDOFF 的仓库（公司仓等），进度和交接写这里；都不写进记忆。
+description: 项目看板（pstate）——个人项目里几个 Claude Code 会话同时干活时的会话互斥锁 ＋ 待办条目。Use when a "[pstate 锁]" denial blocks a Write/Edit; when a SessionStart injection shows a "[pstate]" board; when the user asks 现在都有哪些活 / 别的会话在干什么 / 记个待办 / todo / 让这个会话接手 / 放掉锁; or before starting work on something already listed on the board (claim it first). Progress and handoff go to the project's HANDOFF.md, not here. 公司仓不加锁、不新建条目（遗留任务照旧做完）；进度不写进记忆。
 ---
 
-# pstate：项目任务交接板
+# pstate：会话互斥锁 ＋ 待办看板
 
-记忆存长期有效的结论和教训；**pstate 存"现在"**：谁在哪个工作区做什么、停在哪、下一步、在等什么、哪些未提交改动为什么要留着。一件事做完就移出活跃视图，不攒历史。
+pstate 只管两件事：**互斥**（哪个会话正在干哪件事、占着哪些文件，别的会话别碰）和**待办**（还没开始的事）。进度、卡在哪、下一步写项目的 `HANDOFF.md`，不写进看板条目，也不写进记忆。
 
-## 和别处怎么分：同一件事的进度只记一处
+## 和别处怎么分
 
 | 地方 | 管什么 |
 |---|---|
-| 项目的 `HANDOFF.md`（vibe-flow 的个人项目） | 这个项目做到哪、下一步、谈定的约定。有它就只写它，**不在 pstate 另建任务** |
-| **pstate** | 没有 HANDOFF 的仓库（公司固件仓等）里跨会话、跨 worktree、要留未提交改动的活 |
-| 平台原生记忆、hub 金库 | 只存长期结论和教训，**不记进度**。看到进度类记忆，以 git log 和上面两处为准，删掉或改成指针 |
-| session-sweep（Obsidian「悬着的事」） | 只是发现入口：从它那里捡起一件事，进度落回上面两处之一，不在它那里维护 |
+| **pstate** | 个人项目：活会话与占用、看板条目（一行标题 + 状态 + 一句目标 + HANDOFF 路径） |
+| 项目的 `HANDOFF.md` | 一件事干到一半的现场：已谈定、卡在哪、下一步。做完删掉 |
+| 平台原生记忆、hub 金库 | 只存长期结论和教训，不记进度 |
+| session-sweep | 只是发现入口，捡起来的事落回 HANDOFF / 看板 |
+| 公司仓 | 不加锁、不新建条目（用户定的："公司东西我记得住"）。遗留任务照旧更新到做完再 `done` |
 
-## 数据在哪
+## 锁是怎么工作的（自动，不用手动加）
 
-- 本机 `%LOCALAPPDATA%\ai-project-state\<仓库名>-<哈希>\tasks\<短名>.md`，一个任务一个文件。同一仓库的所有 worktree 找到的是同一个目录（按 `git rev-parse --git-common-dir` 识别），不进仓库、不进 git。
-- 做完的任务在同级 `done\` 里，不会再注入。
-- 文件是明文 UTF-8 `.md`，任何工具都能直接读写。
+- 只在**个人项目**生效：worktree 根有 `docs/BLUEPRINT.md`，或目标文件同目录有 `*.BLUEPRINT.md`；`lock on|off|auto` 可按仓库强制开关（off 优先）。
+- 每次 Write / Edit / MultiEdit / NotebookEdit 前，钩子把这个文件（按相对路径，**跨 worktree 也算同一个**）登记到本会话名下。别的**活会话**占着它就拦下。
+- 占用挂在会话进程上：窗口关掉、会话结束（含 `/clear`）就自动释放；对方的改动提交并合并进 main/master、文件干净后也自动释放。
+- 同一进程里的子代理、本会话起的 headless 子会话，算同一家，不互斥。
+
+## 被拦下（"[pstate 锁]"）时怎么做
+
+1. **停下**，把拦截理由里的占用者、worktree、任务、日志最后更新时间告诉用户，问他：**等对方做完，还是本会话接手**。
+2. 用户说接手 → 跑 `take <会话号>`，再重试那次写入。用户说等 → 去做别的，或结束。
+3. **不许绕过**：改用 Bash / python / 别的工具写同一个文件，等于没拦。
+4. 提示"用户已让会话 X 接手你在这个仓库的活"时：停下告诉用户；这条只拦一次，用户让你继续别的事就重试。
 
 ## 命令
 
-| 场景 | Git Bash（Claude Code） | PowerShell（Codex） |
-|---|---|---|
-| 看现场：各 worktree 的分支和未提交改动数 + 活跃任务 | `pstate.cmd status` | `pstate status` |
-| 新开一件跨会话的活 | `pstate.cmd new <英文短名> --title "<标题>" [--status 进行中\|阻塞\|待办]` | 同左，去掉 `.cmd` |
-| 做完，移出活跃视图 | `pstate.cmd done <短名>` | `pstate done <短名>` |
-| 打印任务目录 | `pstate.cmd path` | `pstate path` |
+Git Bash 里用 `pstate.cmd`，PowerShell 里用 `pstate`；PATH 上没有时用注入里给的 `py -3 "...pstate.py"` 绝对路径调法。默认按当前目录识别仓库，`--cwd <目录>` 可指定。
 
-默认按当前目录识别仓库，`--cwd <目录>` 可指定。`new` 自动填上当前 worktree 和分支，打印新文件路径。PATH 上没有 `pstate` 时，SessionStart 注入里给了带绝对路径的 `py -3 "...pstate.py"` 调法，照用。
+| 场景 | 命令 |
+|---|---|
+| 看现场：各 worktree、活会话及其占用、看板条目 | `status` |
+| 记一条将来要做 / 跨会话的事（个人项目） | `new <英文短名> --title "<标题>" [--status 待办\|进行中\|阻塞]` |
+| 开工前认领看板上的一条（被拒 = 别的活会话在干，停下问用户） | `claim <短名>` |
+| 用户同意后接手另一个会话（转走它的占用和认领） | `take <会话号前缀\|短名>` |
+| 用 squash / cherry-pick 合并、或放弃了改动，收尾放掉占用 | `release` |
+| 做完，移出看板 | `done <短名>` |
+| 本仓库锁开关 | `lock on\|off\|auto` |
+| 打印任务目录 | `path` |
 
-## 什么时候写
+`claim` / `take` / `release` 要在 Claude Code 会话的 Bash 里跑（靠 `CLAUDE_CODE_SESSION_ID` 认出自己）；Codex 会话里不可用，v1 锁只覆盖 Claude Code。
 
-- **开新的跨会话活——AI 主动建，不等用户说"记个任务"**：在没有 HANDOFF 的仓库里，判断出要做的事一个会话做不完、会换 AI 接手，或要留未提交改动等评估时，当场 `new` 一个任务，并在回复里告诉用户一句建了什么。一问一答、当场做完的小事不用建。
-- **有实质进展、要停下、要交接时**：直接编辑任务文件（普通 `.md`，用文件编辑工具），更新这几节：
-  - `## 目标`：一两句话，用户要的结果。
-  - `## 停在哪 / 下一步`：**第一行写下一步**，看板只显示这一行。零上下文的接手者读完要能直接开工。
-  - `## 阻塞 / 在等什么`：等谁、等什么、什么条件解除。
-  - `## 保留的未提交改动`：哪些文件的改动要留着、为什么不提交、哪些不能被覆盖。**git 能查到的改动清单不用抄**，看板每次现场汇总。
-  - 头部 `- 状态:` 在 `进行中 / 阻塞 / 待办` 里改。
-- **做完**：`done <短名>`。别直接删文件。
+## 什么时候建条目、什么时候认领
 
-## 读的时候注意
+- **看板上已有要做的事** → 先 `claim`，再动手。
+- **一个会话做不完、会换会话接手、或用户说"记个待办"** → `new` 一条（默认 `待办`），要马上做就接着 `claim`。一问一答当场做完的不建。
+- 条目只写标题、状态、一句目标；新建时自动填上 worktree、分支和 HANDOFF 路径。别往条目里写进度。
 
-- 看板标「久未更新」或「工作区已不在 git 登记里」的任务，内容可能过期，先核实再照做。
-- 只在当前 worktree 的任务上动手；别的 worktree 的任务是别的会话的地盘，用户明说才接。
-- 注入只在有活跃任务时出现，所以没看到看板不等于这个仓库没用过 pstate，拿不准就跑一次 `status`。
+## 已知盲区
+
+- 经 Bash / python / 其他非原生编辑工具落盘的写入，钩子看不到：既不占用也不拦。
+- "是不是同一件事"靠开工前 `claim` 同一条，工具判断不了两个不同短名是不是一回事。
+- 闲置很久但窗口还开着的会话仍然占着锁；对话日志时间只说明它多久没动，不代表可以自动接手——问用户。
