@@ -1,61 +1,109 @@
 ---
 name: pstate
-description: 项目看板（pstate）——个人项目里几个 Claude Code 会话同时干活时的会话互斥锁 ＋ 待办条目。Use when a "[pstate 锁]" denial blocks a Write/Edit; when a SessionStart injection shows a "[pstate]" board; when the user asks 现在都有哪些活 / 别的会话在干什么 / 记个待办 / todo / 让这个会话接手 / 放掉锁; or before starting work on something already listed on the board (claim it first). Progress and handoff go to the project's HANDOFF.md, not here. 公司仓不加锁、不新建条目（遗留任务照旧做完）；进度不写进记忆。
+description: 全局待续事项回顾与个人工程会话锁。Use when the user asks 回忆以前聊过什么 / 哪些事还能继续 / 继续聊 / 记下来 / 先放着 / 不做了 / 现在有哪些活; proactively capture substantive personal ideas in the current conversation; also use for a pstate lock denial, board injection, claim/take/release. Current AI reviews bounded history and presents resumable cards; no extra model, GUI or automatic full-history import. Progress stays in HANDOFF; company matters are not automatically captured.
 ---
 
-# pstate：会话互斥锁 ＋ 待办看板
+# pstate：待续事项与工程施工
 
-pstate 只管两件事：**互斥**（哪个会话正在干哪件事、占着哪些文件，别的会话别碰）和**待办**（还没开始的事）。进度、卡在哪、下一步写项目的 `HANDOFF.md`，不写进看板条目，也不写进记忆。
+用户要的是找回值得继续的事情，再决定是否推进。**全局事项 thread** 可以是一段已有实质内容的想法、讨论、决定或待办，关联 0..N 个工程路径，也能完全没有 Git 仓库。**旧 tasks/locks** 仍按仓库管理施工认领与文件占用。不要把旧版“只记还没开始的待办”误套到全局事项。
 
-## 和别处怎么分
+施工进度、失败现场、下一条命令写项目 HANDOFF；thread 保存动机、有效结论、未定问题、带时间的历史停点、来源与 HANDOFF 引用。记忆只存长期结论。公司事项不自动收录，混合会话按具体内容判断，不能按启动 cwd 一刀切。
 
-| 地方 | 管什么 |
-|---|---|
-| **pstate** | 个人项目：活会话与占用、看板条目（一行标题 + 状态 + 一句目标 + HANDOFF 路径） |
-| 项目的 `HANDOFF.md` | 一件事干到一半的现场：已谈定、卡在哪、下一步。做完删掉 |
-| 平台原生记忆、hub 金库 | 只存长期结论和教训，不记进度 |
-| session-sweep | 只是发现入口，捡起来的事落回 HANDOFF / 看板 |
-| 公司仓 | 不加锁、不新建条目（用户定的："公司东西我记得住"）。遗留任务照旧更新到做完再 `done` |
+## 当前会话：实质想法当场接住
 
-## 锁是怎么工作的（自动，不用手动加）
+1. 聊出了值得再次找到的个人事项，就主动建为 open；不必等用户说“记个待办”。随口一句、只有 AI 建议且用户未响应的方案，不自动变成承诺。
+2. 先 `thread list --all --json` 对照已有事项，按目标和结果判断归并；同名不等于同一件事，同一个消息也可能包含多件事。
+3. 找到真实消息来源，按下方结构准备 JSON。用户结论用 `confirmed: [{said, source}]`，保留原话；未核验标记不得冒充用户已确认。未知问题放 questions；建议写 next_suggestion，工具会标记 AI。
+4. `thread add --input-file item.json --json`；同一事项新材料用 `add --into ID --rev N`，输入只能含 sources；修改摘要用 `set ID --rev N`。同锚点确实是另一件事才用 --distinct。
+5. 看回执与 `thread show ID --json`，核对已持久化的内容才说“已记下”。dry-run、写失败或替换后未核验，都不能报已保存。原话尚未落到本地日志时不能伪造锚点或确认状态。
 
-- 只在**个人项目**生效：worktree 根有 `docs/BLUEPRINT.md`，或目标文件同目录有 `*.BLUEPRINT.md`；`lock on|off|auto` 可按仓库强制开关（off 优先）。
-- 每次 Write / Edit / MultiEdit / NotebookEdit 前，钩子把这个文件（按相对路径，**跨 worktree 也算同一个**）登记到本会话名下。别的**活会话**占着它就拦下。
-- 占用挂在会话进程上：窗口关掉、会话结束（含 `/clear`）就自动释放；对方的改动提交并合并进 main/master、文件干净后也自动释放。
-- 同一进程里的子代理、本会话起的 headless 子会话，算同一家，不互斥。
+add 创建 open，追加来源不改变已有状态；新来源绝不自动重开 parked/dropped/done。重复 add 可能返回已存在 ID，仍需 show 确认。
 
-## 被拦下（"[pstate 锁]"）时怎么做
+## 历史回顾：当前 AI 先读，用户只看卡片
 
-1. **停下**，把拦截理由里的占用者、worktree、任务、日志最后更新时间告诉用户，问他：**等对方做完，还是本会话接手**。
-2. 用户说接手 → 跑 `take <会话号>`，再重试那次写入。用户说等 → 去做别的，或结束。
-3. **不许绕过**：改用 Bash / python / 别的工具写同一个文件，等于没拦。
-4. 提示"用户已让会话 X 接手你在这个仓库的活"时：停下告诉用户；这条只拦一次，用户让你继续别的事就重试。
+1. 先读全局已有事项；确定本次时间/来源范围。discover 只提供本地正文和来源，不负责语义提取。
+2. 用 `thread discover --input-file discover.json --json` 分页取正文，当前 AI 自己读、筛出有实质可接续内容的个人事项，去除纯寒暄、已解决的一问一答和重复讨论。需要继续阅读时沿 next_cursor 取下一页，不让用户逐页筛原文。
+3. 一个会话可拆多事项；跨会话同一事项归并来源。先查已有卡片；历史卡可记录带时间和来源的当时停点，不必为每张回顾卡审计工程。声称当前现状或真正恢复执行前，才核当前 Git、实际成果和 HANDOFF。show 只给 HANDOFF 是否存在及修改时间，不会替你核其正文。
+4. 使用 add/set 形成可读卡片，展示：为什么聊、已定什么、还缺什么、截至何时停在哪、可继续的下一步及其 AI 身份。引用原话、历史摘要、当前验证事实分别说清。
+5. 用户只需对卡片选“继续聊 / 决定做 / 先放着 / 不做了”；已无后续的内容可不建卡，但要在完整审阅该会话版本后才显式 seen。长会话跨页时必须读完相关全体正文，不能因为当前页看过就提前 seen。
+6. seen 输入为 platform/session/version，三项取 discover 的实际返回。扫描不等于已审；分页中更新 seen 可以继续原游标，历史内容版本变化则游标失效，重新 discover。不可声称找回了全部历史。
 
-## 命令
+普通 roots 模式每次读取选中目录的全部 JSONL，limit/max_chars 仅限制返回页，没有扫描缓存。只想精确抽样用 files。现代/旧格式的人类来源可信度不同，legacy/unknown 必须保留不确定；headless、agent、系统、工具、推理及可识别的压缩副本会过滤，但未知样式不能凭空恢复。本地缺失或删除记录不可找回。当前环境的 CODEX_THREAD_ID / CLAUDE_CODE_SESSION_ID 自动排除，另可传 exclude_sessions。
 
-Git Bash 里用 `pstate.cmd`，PowerShell 里用 `pstate`；PATH 上没有时用注入里给的 `py -3 "...pstate.py"` 绝对路径调法。默认按当前目录识别仓库，`--cwd <目录>` 可指定。
+session-sweep 只允许可选只读旧 state 提示；不调用其 run/no-judge，不修改旧库。它的 checked/closed 是旧会话摘要的关闭，不能当作事项 done，也不能当作整会话 seen。
 
-| 场景 | 命令 |
-|---|---|
-| 看现场：各 worktree、活会话及其占用、看板条目 | `status` |
-| 记一条将来要做 / 跨会话的事（个人项目） | `new <英文短名> --title "<标题>" [--status 待办\|进行中\|阻塞]` |
-| 开工前认领看板上的一条（被拒 = 别的活会话在干，停下问用户） | `claim <短名>` |
-| 用户同意后接手另一个会话（转走它的占用和认领） | `take <会话号前缀\|短名>` |
-| 用 squash / cherry-pick 合并、或放弃了改动，收尾放掉占用 | `release` |
-| 做完，移出看板 | `done <短名>` |
-| 本仓库锁开关 | `lock on\|off\|auto` |
-| 打印任务目录 | `path` |
+## 四个选择与完成
 
-`claim` / `take` / `release` 要在 Claude Code 会话的 Bash 里跑（靠 `CLAUDE_CODE_SESSION_ID` 认出自己）；Codex 会话里不可用，v1 锁只覆盖 Claude Code。
+| 用户意思 | 命令 | 实际效果 |
+|---|---|---|
+| 继续聊 | thread choose ID continue --json | 只恢复卡片供接着聊，状态和 rev 不变；不传 rev/input-file/dry-run |
+| 决定做 | thread choose ID do --rev N --input-file choice.json --json | 记为 decided，仅记录决定，不创建执行任务、不改项目 |
+| 先放着 | thread choose ID later --rev N --input-file choice.json --json | 记为 parked，默认列表隐藏，可用 list --state parked 或 list --all 找回 |
+| 不做了 | thread choose ID drop --rev N --input-file choice.json --json | 记为 dropped，保留决定及来源 |
+| 已完成 | thread done ID --rev N --input-file done.json --json | 必须有非空 evidence 列表；可由 assistant 依据实际证据记录，不能造用户确认 |
+| 重新打开 | thread reopen ID --rev N --input-file choice.json --json | 将 parked/dropped/done 重新设为 open，须明确用户原话 |
 
-## 什么时候建条目、什么时候认领
+do/later/drop/reopen 需要 choice.json 的 said/source。said 必须逐字出现在用户 source.excerpt 中。工具核验消息出处，不替 AI 判断这句话是否授权该选择；核验失败仍可能记录选择且 confirmed=false，必须如实说明。不要从讨论热度推断“决定做”。dropped/done 再选 do/later/drop 前必须先 reopen。
 
-- **看板上已有要做的事** → 先 `claim`，再动手。
-- **一个会话做不完、会换会话接手、或用户说"记个待办"** → `new` 一条（默认 `待办`），要马上做就接着 `claim`。一问一答当场做完的不建。
-- 条目只写标题、状态、一句目标；新建时自动填上 worktree、分支和 HANDOFF 路径。别往条目里写进度。
+完成 evidence 应可追查，例如实际提交、交付物及验证范围；“测试通过”不等于已安装或实际用户验收。done.json 仅有 evidence 时 actor=assistant；若写 said/source，则同样必须真实核验。continue 不会撤销关闭，只有明确决定才走 reopen。
 
-## 已知盲区
+## 调用和 JSON
 
-- 经 Bash / python / 其他非原生编辑工具落盘的写入，钩子看不到：既不占用也不拦。
-- "是不是同一件事"靠开工前 `claim` 同一条，工具判断不了两个不同短名是不是一回事。
-- 闲置很久但窗口还开着的会话仍然占着锁；对话日志时间只说明它多久没动，不代表可以自动接手——问用户。
+PowerShell 用 `pstate`，Git Bash 用 `pstate.cmd`。无 shim 时直接调用脚本；本机 Codex 的解释器为 `C:/Users/huawei/AppData/Local/Programs/Python/Python314/python.exe`。先查 `pstate thread --ai-help`。复杂输入用 UTF-8 JSON 文件或 `--input-file -` 的 stdin；自动调用用参数数组，不能把原话插入命令字符串。
+
+默认历史输入示例（时间与预算按本次范围修改）：
+
+```json
+{"since":"2026-10-01T00:00:00Z","limit":4,"max_chars":16000,"exclude_sessions":[]}
+```
+
+可指定 `roots: {"claude":["C:/path/to/history"],"codex":["C:/path/to/sessions"]}`。精确抽样改为 `files: {"claude":["C:/path/one.jsonl"],"codex":["C:/path/two.jsonl"]}`；files 模式只读指定文件。下一页保持选择范围并带实际 cursor；sweep_state 是可选旧 state 文件路径。
+
+下面是 add 的**字段示例，不是真实来源**；运行前必须整体替换 sources 中的会话、原生锚点、时间、摘录、路径与哈希，不能将样例导入正式库：
+
+```json
+{
+  "title": "为小工具讨论退出清理行为",
+  "motivation": "需要下次继续辨明退出时应清理的资源",
+  "confirmed": [],
+  "questions": ["哪些资源由本工具创建并负责释放？"],
+  "stopped_at": "截至 2026-10-22T10:00:00+08:00，仍在讨论需求",
+  "next_suggestion": "核对资源归属后再确定清理范围",
+  "paths": [],
+  "handoff": [],
+  "sources": [{
+    "platform": "claude",
+    "session": "replace-with-native-session-id",
+    "anchor": "replace-with-native-message-anchor",
+    "time": "2026-10-22T10:00:00+08:00",
+    "role": "user",
+    "excerpt": "先记下来",
+    "excerpt_hash": "0b0806ce9a388b9629406d7e61875b36a774ed6bc2fa4d9e6d2f6c50067f00de",
+    "path": "C:/replace-with-native-history-path.jsonl"
+  }]
+}
+```
+
+source 必需 platform/session/anchor/time/role/excerpt/excerpt_hash，path 在存储层可选，但原话核验需要原始日志路径。excerpt_hash 是摘录 UTF-8 的 SHA-256，优先直接复用 discover 返回的 source；不要把 assistant 摘要当 user 原话。sources 为数组；choice.json 的 source 是单个对象，例如 `{"said":"<用户逐字原话>","source":<对应完整来源对象>}`（此处为结构示意）。confirmed 每项也只有 said/source；工具回读会增加 verified/verification_note，不把这些输出字段原样写回输入。
+
+```text
+pstate thread add --input-file item.json --dry-run --json
+pstate thread add --input-file item.json --json
+pstate thread show <回执中的ID> --json
+pstate thread list --all --json
+pstate thread seen --input-file seen.json --json
+```
+
+seen.json 结构：`{"platform":"codex","session":"<返回的会话ID>","version":"<返回的内容版本>"}`。done.json 结构：`{"evidence":["<真实完成证据与验证范围>"]}`。set 只接收可编辑字段，不可改 state；所有变更命令支持同写入路径 dry-run，预演只可能创建协调锁，不写业务库。
+
+thread 的 JSON 信封为 ok/data/error/meta；成功在 stdout，失败在 stderr，退出码 0/1/2 分别为成功/运行失败或冲突/输入错误。帮助始终是文档。数据在 PSTATE_HOME（默认本机 LOCALAPPDATA/ai-project-state）的 threads/threads.json；有备份和版本检查。rev 冲突先 show 再重做判断；replaced_unverified 先核落库内容，不盲目重试。
+
+## 旧 tasks/locks：继续兼容
+
+- `status` 看当前工程 worktree、活会话和待办；`new <短名> --title "<标题>"` 建施工待办，`claim <短名>` 认领，`done <短名>` 归档。这个 done 和全局 thread done 是两个命令。
+- 工程待办关联 HANDOFF，不复制施工进度；跨会话施工可建旧 task，纯讨论只需全局 thread。公司仓不自动新建旧 task，已有遗留任务做完照旧归档。
+- 个人工程按蓝图识别，`lock on|off|auto` 可设置。原生编辑前按仓库相对路径占用，跨 worktree 同路径也互斥；进程结束、会话结束或满足合并清理条件时释放。同进程/祖先会话放行，兄弟 headless 会话仍互斥。
+- 遇到“[pstate 锁]”必须停下，向用户说明占用者、worktree、任务及时间，询问等候还是接手；用户明确接手才 `take <会话号或短名>` 后重试，不用 shell/python 绕过。
+- squash/cherry-pick 合并或放弃施工时 `release`。闲置多久都不是自动接手授权。
+- claim/take/release 只支持有 Claude 会话身份的环境；Codex 锁未实现。shell/python 写入仍是原生编辑锁盲区。
+- 会话开始最多补充全局 open/decided 计数与入口，不后台扫历史。脚本/CLI、纯翻译和历史样本验证不等于安装后宿主钩子已验证。

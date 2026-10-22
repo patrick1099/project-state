@@ -1,0 +1,327 @@
+"""Thread storage and CLI contracts exercised against temporary state only."""
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from pstate_threads import store
+from pstate_threads.core import ThreadError
+
+
+def source(session='session-1', anchor='message-1', excerpt='请继续做这件事'):
+    return {'platform': 'claude', 'session': session, 'anchor': anchor,
+            'time': '2026-10-22T00:00:00Z', 'role': 'user', 'excerpt': excerpt,
+            'excerpt_hash': hashlib.sha256(excerpt.encode('utf-8')).hexdigest()}
+
+
+def payload(title='待续事项', **values):
+    return {'title': title, 'sources': [source()], **values}
+
+
+def decision(text='请继续做这件事'):
+    return {'said': text, 'source': source(excerpt=text)}
+
+
+class StoreTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.directory = Path(self.tmp.name) / 'threads'
+
+    def add(self, **kw):
+        return store.mutate(self.directory, 'add', payload(**kw))['item']
+
+    def test_replay_distinct_into_preserves_closed_state(self):
+        item = self.add()
+        again = store.mutate(self.directory, 'add', payload())
+        self.assertEqual(again['id'], item['id'])
+        self.assertFalse(again['committed'])
+        with self.assertRaises(ThreadError):
+            store.mutate(self.directory, 'add', payload('另一件事'))
+        second = store.mutate(self.directory, 'add', payload('另一件事'), distinct=True)
+        self.assertNotEqual(second['id'], item['id'])
+        closed = store.mutate(self.directory, 'drop', decision(), ident=item['id'], rev=1)['item']
+        more = {'sources': [source(session='session-2')]}
+        updated = store.mutate(self.directory, 'add', more, into=item['id'], rev=closed['rev'])['item']
+        self.assertEqual(updated['state'], 'dropped')
+        self.assertEqual(store.mutate(self.directory, 'add', payload())['id'], item['id'])
+        self.assertTrue(store.mutate(self.directory, 'add', more, into=item['id'], rev=1)['replayed'])
+        self.assertEqual(len(store.read(self.directory)['items']), 2)
+
+    def test_initial_add_replays_after_rename(self):
+        item = self.add()
+        store.mutate(self.directory, 'set', {'title': '新的显示名'}, ident=item['id'], rev=1)
+        result = store.mutate(self.directory, 'add', payload())
+        self.assertTrue(result['replayed'])
+        self.assertEqual(result['id'], item['id'])
+        self.assertEqual(result['item']['title'], '新的显示名')
+        self.assertEqual(result['item']['rev'], 2)
+
+    def test_rev_and_dry_run_use_same_write_path(self):
+        result = store.mutate(self.directory, 'add', payload(), dry_run=True)
+        self.assertTrue(result['dry_run'])
+        self.assertFalse((self.directory / 'threads.json').exists())
+        item = self.add(paths=['C:/one', 'D:/two'])
+        before = (self.directory / 'threads.json').read_bytes()
+        preview = store.mutate(self.directory, 'set', {'stopped_at': '等待联调'}, ident=item['id'], rev=1, dry_run=True)
+        self.assertEqual(preview['item']['rev'], 2)
+        self.assertEqual((self.directory / 'threads.json').read_bytes(), before)
+        store.mutate(self.directory, 'set', {'stopped_at': '等待联调'}, ident=item['id'], rev=1)
+        with self.assertRaises(ThreadError):
+            store.mutate(self.directory, 'set', {'title': '错改'}, ident=item['id'], rev=1)
+        self.assertEqual(store.read(self.directory)['items'][item['id']]['title'], '待续事项')
+
+    def test_corruption_schema_and_missing_primary_fail_closed(self):
+        self.add()
+        path = self.directory / 'threads.json'
+        for contents in ('{bad', '{"schema":99,"items":{},"seen":{}}',
+                         '{"schema":1,"items":[],"seen":{}}'):
+            path.write_text(contents, encoding='utf-8')
+            with self.assertRaises(ThreadError):
+                store.mutate(self.directory, 'add', payload())
+            self.assertEqual(path.read_text(encoding='utf-8'), contents)
+        path.unlink()
+        (self.directory / 'bak.json').write_text('{}', encoding='utf-8')
+        with self.assertRaisesRegex(ThreadError, 'backup'):
+            store.read(self.directory)
+        with self.assertRaises(ThreadError):
+            store.mutate(self.directory, 'add', payload())
+        self.assertFalse(path.exists())
+
+    def test_backup_is_previous_valid_version(self):
+        item = self.add()
+        original = store.read(self.directory)
+        store.mutate(self.directory, 'set', {'title': '新标题'}, ident=item['id'], rev=1)
+        backup = json.loads((self.directory / 'bak.json').read_text(encoding='utf-8'))
+        self.assertEqual(backup, original)
+
+    def test_post_replace_readback_error_reports_replaced(self):
+        item = self.add()
+        real_load = store.load
+        count = 0
+        def faulty(directory):
+            nonlocal count
+            count += 1
+            if count == 2:
+                raise OSError('injected readback fault')
+            return real_load(directory)
+        with patch.object(store, 'load', side_effect=faulty):
+            with self.assertRaises(ThreadError) as raised:
+                store.mutate(self.directory, 'set', {'title': '已经替换'}, ident=item['id'], rev=1)
+        self.assertEqual(raised.exception.details['commit_status'], 'replaced_unverified')
+        self.assertEqual(store.read(self.directory)['items'][item['id']]['title'], '已经替换')
+
+    def test_pre_replace_failure_preserves_primary(self):
+        item = self.add()
+        original = store.read(self.directory)
+        with patch.object(store.os, 'replace', side_effect=OSError('disk problem')):
+            with self.assertRaises(ThreadError) as raised:
+                store.mutate(self.directory, 'set', {'title': '不会替换'}, ident=item['id'], rev=1)
+        self.assertEqual(raised.exception.details['commit_status'], 'not_replaced')
+        self.assertEqual(store.read(self.directory), original)
+
+    def test_mutex_timeout_and_schema_validation(self):
+        with patch.object(store.pstate_lock, 'mutex', side_effect=TimeoutError('busy')):
+            with self.assertRaises(TimeoutError):
+                store.mutate(self.directory, 'add', payload())
+        invalid = payload()
+        invalid['sources'][0]['excerpt_hash'] = 'wrong'
+        with self.assertRaises(ThreadError):
+            store.mutate(self.directory, 'add', invalid)
+        self.assertFalse((self.directory / 'threads.json').exists())
+
+    def test_done_requires_evidence_without_claiming_user_confirmation(self):
+        item = self.add()
+        with self.assertRaises(ThreadError):
+            store.mutate(self.directory, 'done', {}, ident=item['id'], rev=1)
+        result = store.mutate(self.directory, 'done', {'evidence': ['test: 12 tests passed; not installed']}, ident=item['id'], rev=1)
+        event = result['item']['log'][-1]
+        self.assertEqual(event['actor'], 'assistant')
+        self.assertFalse(event['confirmed'])
+        self.assertNotIn('said', event)
+        self.assertFalse(result['confirmed'])
+
+    def test_stat_failure_never_treats_database_as_empty(self):
+        self.add()
+        original = (self.directory / 'threads.json').read_bytes()
+        real_stat = Path.stat
+        def failing(path, *args, **kwargs):
+            if path.name == 'threads.json':
+                raise PermissionError('injected inaccessible database')
+            return real_stat(path, *args, **kwargs)
+        with patch.object(Path, 'stat', failing):
+            with self.assertRaises(ThreadError):
+                store.read(self.directory)
+            with self.assertRaises(ThreadError):
+                store.mutate(self.directory, 'add', payload())
+        self.assertEqual((self.directory / 'threads.json').read_bytes(), original)
+
+    def test_malformed_optional_fields_are_rejected_without_write(self):
+        item = self.add()
+        original = store.read(self.directory)
+        path = self.directory / 'threads.json'
+        for key, value in [('handoff', 123), ('paths', 'abc'), ('next_suggestion', {'text': 'x', 'by': 'human'}),
+                           ('confirmed', [{'said': 'x'}]), ('questions', [None])]:
+            invalid = copy.deepcopy(original)
+            invalid['items'][item['id']][key] = value
+            path.write_text(json.dumps(invalid), encoding='utf-8')
+            before = path.read_bytes()
+            with self.assertRaises(ThreadError):
+                store.mutate(self.directory, 'add', payload('new'), distinct=True)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_stdin_tty_is_rejected_for_explicit_dash(self):
+        from pstate_threads.cli import read_input
+        with patch('sys.stdin.isatty', return_value=True):
+            with self.assertRaises(ThreadError):
+                read_input('-')
+
+    def test_handoff_facts_do_not_infer_completion(self):
+        handoff = Path(self.tmp.name) / 'HANDOFF.md'
+        handoff.write_text('现场记录', encoding='utf-8')
+        item = self.add(handoff=[str(handoff), str(handoff.with_name('missing.md'))])
+        card = store.card(item)
+        self.assertTrue(card['handoff_facts'][0]['exists'])
+        self.assertFalse(card['handoff_facts'][1]['exists'])
+        self.assertEqual(card['state'], 'open')
+
+
+class CliTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name) / 'state'
+        self.env = {**os.environ, 'PSTATE_HOME': str(self.home), 'PYTHONDONTWRITEBYTECODE': '1'}
+        self.base = [sys.executable, '-B', str(ROOT / 'scripts/pstate.py')]
+
+    def run_cli(self, args, value=None, code=0, raw=None):
+        data = raw if raw is not None else json.dumps(value, ensure_ascii=False) if value is not None else ''
+        result = subprocess.run([*self.base, 'thread', *args], input=data, text=True, encoding='utf-8',
+                                capture_output=True, cwd=self.tmp.name, env=self.env, timeout=20)
+        self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+        if code:
+            self.assertEqual(result.stdout, '')
+            return json.loads(result.stderr)
+        self.assertEqual(result.stderr, '')
+        return json.loads(result.stdout)['data']
+
+    def test_complete_no_repo_workflow(self):
+        item = self.run_cli(['add', '--json'], payload(paths=['C:/one', 'D:/two']))['item']
+        ident = item['id']
+        shown = self.run_cli(['show', ident, '--json'])['item']
+        self.assertEqual(shown['paths'], ['C:/one', 'D:/two'])
+        resumed = self.run_cli(['choose', ident, 'continue', '--json'])
+        self.assertFalse(resumed['committed'])
+        self.assertEqual(resumed['item']['rev'], 1)
+        for choice, expected in [('do', 'decided'), ('later', 'parked'), ('drop', 'dropped')]:
+            item = self.run_cli(['choose', ident, choice, '--rev', str(item['rev']), '--json'], decision())['item']
+            self.assertEqual(item['state'], expected)
+            self.assertFalse(item['log'][-1]['confirmed'])
+        listed = self.run_cli(['list', '--format', 'json'])
+        self.assertEqual(listed['items'], [])
+        self.assertEqual(listed['counts']['dropped'], 1)
+        item = self.run_cli(['reopen', ident, '--rev', str(item['rev']), '--json'], decision('重新开始'))['item']
+        self.assertEqual(item['state'], 'open')
+        item = self.run_cli(['done', ident, '--rev', str(item['rev']), '--json'], {'evidence': ['commit: abc; test: passed']})['item']
+        self.assertEqual(item['state'], 'done')
+        self.assertFalse(item['log'][-1]['confirmed'])
+        self.assertEqual(len(self.run_cli(['list', '--all', '--json'])['items']), 1)
+
+    def test_validation_help_terminator_and_empty_stdout(self):
+        bad = self.run_cli(['set', 'missing', '--json'], {}, code=2)
+        self.assertEqual(bad['error']['code'], 'E_VALIDATION')
+        self.run_cli(['add', '--format=json'], raw='broken', code=2)
+        self.run_cli(['list', '--bad', '--json'], code=2)
+        self.run_cli(['--json', 'show', '--', '--ai-help'], code=1)
+        result = subprocess.run([*self.base, 'thread', 'nonsense', '--ai-help', '--json'],
+                                capture_output=True, text=True, encoding='utf-8', env=self.env, cwd=self.tmp.name)
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(result.stdout.startswith('---\nname:'))
+        self.assertIn('## Quick Reference', result.stdout)
+        self.assertFalse(self.home.exists())
+
+    def test_input_path_error_classification(self):
+        result = self.run_cli(['add', '--input-file', str(Path(self.tmp.name) / 'missing.json'), '--json'], code=1)
+        self.assertEqual(result['error']['code'], 'E_NOT_FOUND')
+        result = self.run_cli(['add', '--input-file', self.tmp.name, '--json'], code=2)
+        self.assertEqual(result['error']['code'], 'E_VALIDATION')
+        invalid = Path(self.tmp.name) / 'bad.json'
+        invalid.write_bytes(b'\xff\xff')
+        result = self.run_cli(['add', '--input-file', str(invalid), '--json'], code=2)
+        self.assertEqual(result['error']['code'], 'E_VALIDATION')
+
+    def test_seen_explicit_and_dry_run(self):
+        value = {'platform': 'codex', 'session': 's1', 'version': 'v1'}
+        self.run_cli(['seen', '--dry-run', '--json'], value)
+        self.assertFalse((self.home / 'threads/threads.json').exists())
+        self.run_cli(['seen', '--json'], value)
+        self.assertEqual(store.read(self.home / 'threads')['seen']['codex:s1']['version'], 'v1')
+
+    def test_discover_seen_and_native_source_verification(self):
+        self.env['USERPROFILE'] = self.tmp.name
+        self.env.pop('CLAUDE_CODE_SESSION_ID', None)
+        self.env.pop('CODEX_THREAD_ID', None)
+        directory = Path(self.tmp.name) / '.claude/projects/fixture'
+        directory.mkdir(parents=True)
+        log = directory / 'native-session.jsonl'
+        row = {'sessionId': 'native-session', 'uuid': 'user-message', 'type': 'user',
+               'timestamp': '2026-10-22T00:00:00Z', 'origin': {'kind': 'human'}, 'entrypoint': 'cli',
+               'message': {'role': 'user', 'content': '决定继续这件事'}}
+        log.write_text(json.dumps(row, ensure_ascii=False) + '\n', encoding='utf-8')
+        options = {'files': {'claude': [str(log)]}, 'roots': {}}
+        discovered = self.run_cli(['discover', '--input-file', '-', '--json'], options)
+        self.assertEqual(len(discovered['sessions']), 1)
+        self.assertFalse(self.home.exists())
+        session = discovered['sessions'][0]
+        src = session['sources'][0]
+        item = self.run_cli(['add', '--json'], {'title': '本地来源事项', 'sources': [src],
+                                                  'confirmed': [{'said': '决定继续这件事', 'source': src}]})['item']
+        self.assertTrue(item['confirmed'][0]['verified'])
+        chosen = self.run_cli(['choose', item['id'], 'do', '--rev', '1', '--json'],
+                              {'said': '决定继续这件事', 'source': src})
+        self.assertTrue(chosen['confirmed'], chosen)
+        self.run_cli(['seen', '--json'], {key: session[key] for key in ('platform', 'session', 'version')})
+        self.assertEqual(self.run_cli(['discover', '--input-file', '-', '--json'], options)['sessions'], [])
+        row['message']['content'] += '，补充新的决定'
+        log.write_text(json.dumps(row, ensure_ascii=False) + '\n', encoding='utf-8')
+        self.assertEqual(len(self.run_cli(['discover', '--input-file', '-', '--json'], options)['sessions']), 1)
+        self.env['CLAUDE_CODE_SESSION_ID'] = 'native-session'
+        self.assertEqual(self.run_cli(['discover', '--input-file', '-', '--json'], options)['sessions'], [])
+
+    def test_hook_outside_git_only_counts(self):
+        self.run_cli(['add', '--json'], payload(title='do not inject this title'))
+        result = subprocess.run([*self.base, 'hook'], input=json.dumps({'cwd': self.tmp.name}),
+                                capture_output=True, text=True, encoding='utf-8', env=self.env, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        context = json.loads(result.stdout)['hookSpecificOutput']['additionalContext']
+        self.assertIn('thread list', context)
+        self.assertNotIn('do not inject this title', context)
+
+    def test_parallel_writers_do_not_lose_items(self):
+        processes = []
+        for i in range(8):
+            item = payload(title='parallel-' + str(i), sources=[source(session='s-' + str(i))])
+            input_file = Path(self.tmp.name) / f'input-{i}.json'
+            input_file.write_text(json.dumps(item), encoding='utf-8')
+            processes.append(subprocess.Popen([*self.base, 'thread', 'add', '--json', '--input-file', str(input_file)],
+                                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                              text=True, encoding='utf-8', env=self.env, cwd=self.tmp.name))
+        identifiers = set()
+        for process in processes:
+            out, err = process.communicate(timeout=30)
+            self.assertEqual(process.returncode, 0, out + err)
+            identifiers.add(json.loads(out)['data']['id'])
+        self.assertEqual(len(identifiers), 8)
+        self.assertEqual(len(self.run_cli(['list', '--json'])['items']), 8)
+
+
+if __name__ == '__main__':
+    unittest.main()

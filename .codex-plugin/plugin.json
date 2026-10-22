@@ -1,7 +1,7 @@
 {
   "name": "project-state",
-  "version": "0.2.0",
-  "description": "个人项目的会话互斥锁 + 待办看板(Codex 侧 v0.2 只有会话开始注入看板,锁未适配)。",
+  "version": "0.3.0",
+  "description": "全局待续回顾：当前会话收录、Claude/Codex 历史正文发现、来源追溯与用户选择；另保留个人工程待办及 Claude 会话文件互斥。回顾不额外调用模型，工程施工进度继续引用 HANDOFF。Codex 不提供文件锁。",
   "skills": "./skills/",
   "hooks": "./hooks/codex.json"
 }

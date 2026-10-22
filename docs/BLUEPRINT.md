@@ -3,7 +3,7 @@
 > 重构照本文行为契约重写即可；未列为硬约束的一切都是实现细节，可自由更改。
 
 ## 1. 一句话
-几个 Claude Code 会话同时干同一个**个人项目**时的会话互斥锁，外加一块待办看板：哪个会话正在干哪件事、占着哪些文件，别的会话写同一个文件会被拦下，由 AI 停下问用户等对方还是接手；还没开始的事记成看板条目。进度和交接不在这里，写项目的 `HANDOFF.md`。
+帮助用户接住当前实质想法、从本地历史找回可继续的个人事项，再决定继续聊、推进、暂放或放弃；全局事项与工程正交，无仓库也能使用。同时保留个人工程的会话互斥锁与施工待办。施工进度和交接写项目 HANDOFF，通过引用关联。
 
 ## 2. 功能与行为 + I/O 契约
 
@@ -30,13 +30,13 @@
 - `claim` / `take` / `release` 只能在 Claude Code 会话里运行（靠会话号环境变量认出自己），认不出退出 1。所有命令默认按当前目录识别仓库，`--cwd <目录>` 可指定；从哪个 worktree、哪个子目录进来，看到的都是同一份。
 
 ### 2.3 会话开始注入
-- 从标准输入读宿主给的 JSON（取 `cwd`、`hook_event_name`、`session_id`）。不在 git 仓库里、或本仓库既没有看板条目也没有别的活会话 → 什么都不输出，退出 0。否则输出：看板 ＋ 当前 worktree 名下条目的全文（合计超过 4000 字就只列路径并要求读完，绝不截断）＋ 用法。
+- 从标准输入读宿主 JSON；全局有 open/decided 时输出计数及入口，不扫描历史，无 Git 也可提示。旧仓库看板仅在有条目或其他活会话时输出：看板 ＋ 当前 worktree 名下条目的全文（合计超过 4000 字就只列路径并要求读完，绝不截断）＋ 用法。
 - 个人项目的用法：开工前对一下活会话和条目；要做的事在看板上先 `claim`，被拒就停下问用户；看板上没有、又会跨会话的事 `new` 一条再 claim，一问一答当场做完的不建；撞上占用会被拦、照提示问用户、别绕过；进度和交接写 HANDOFF，不写进条目、不写进记忆；做完 `done`，squash / cherry-pick 合并或放弃改动的收尾跑 `release`。附可直接执行的本工具绝对路径调法。
 - 公司仓（遗留任务）的用法：用户定了不加锁、不新建任务，只保留已有任务直到做完；接着对应任务干、有进展更新该任务文件、做完 `done`；进度不写进记忆。
 
 ### 2.4 和别处的分工
-- 进度和交接只写项目的 `HANDOFF.md`；本板只管会话互斥和待办条目，条目里不写进度。平台原生记忆和 hub 金库只存长期结论和教训。session-sweep 只是发现入口，捡起来的事落回 HANDOFF 或本板。
-- 公司仓不加锁、不新建条目（用户："公司东西我记得住"）；已有的遗留任务照旧注入、更新到做完。
+- 进度和交接只写项目 HANDOFF；全局事项引用它并保留有时间的历史停点，旧施工条目不复制进度。平台原生记忆和 hub 金库只存长期结论和教训。session-sweep 只读旧判断可作提示，不替代当前 AI 审阅与事项决定。
+- 公司事项不自动收录；旧公司仓不新建施工条目、不自动加锁，已有遗留任务照旧注入并做完归档。
 
 ### 2.5 I/O / 数据契约
 - 任务目录：`%LOCALAPPDATA%\ai-project-state\<仓库目录名>-<git common dir 实际路径规范化后的 sha1 前 8 位>\`（环境变量 `PSTATE_HOME` 可改根目录）。内含 `repo.txt`（记录 git common dir）、`tasks\<短名>.md`（活跃条目）、`done\`（已完成）、`locks.json`（锁状态）。在途写入的标记放在根目录的 `inflight\`。
@@ -44,18 +44,37 @@
 - 锁状态：UTF-8 JSON，仓库一份；记录活会话（会话号、进程号、进程创建时间、对话日志路径、认领的任务）、按相对路径的文件占用（占用者、所在 worktree、在途写入）、仓库开关、待通知的"被接手"。只由本工具在仓库级短锁内读改写、原子替换。
 - 注入输出：`{"hookSpecificOutput": {"hookEventName": <事件名>, "additionalContext": <文本>}}`；拦截输出：`{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": <文本>}}`；放行时不输出。均为 UTF-8。
 
+### 2.6 全局待续事项与历史回顾
+- **当前会话主动收录**：个人想法已有实质内容且值得跨会话继续 → 当前 AI 形成 open 卡片，记录动机、有效结论、未定问题、带时间的历史停点和来源。收录不等于承诺；公司事项不自动收录。事项关联 0..N 个工程路径，可无 Git；会话、仓库、worktree 都不是事项身份。
+- **历史发现**：给 Claude/Codex 本地历史范围 → 返回有界纯正文、原生消息来源、内容版本、覆盖统计和续页游标。当前 AI 阅读、筛选、拆分与归并后 add；用户看可继续的卡片，不逐页筛原文。工具不做语义判断，不另调模型、不自动全量导入。
+- **来源与时效**：保留原话的来源平台、会话、锚点、时间、角色、摘录及哈希；来源核验失败明确标未核验。核验只证明原话出处，不证明其授权含义。AI 建议单独标识；复述历史“待做/阻塞/未提交”前由当前 AI 查 Git、成果和 HANDOFF。历史 stopped_at 必须带截至时间，不能冒充当前进度。
+- **归并与幂等**：重复收录相同标题及来源可返回已有 ID；同锚点拆成不同事项须明确 --distinct，追加到已有事项用 --into ID --rev N，且仅追加来源。改摘要走 set。新来源不能重开 parked/dropped/done；同名仅提供相似提示，不自动合并。
+- **四个选择**：continue 只返回卡片，状态和版本不变；do → decided，仅记录决定，不创建任务或执行工作；later → parked，默认隐藏但 list --all/--state parked 可找回；drop → dropped，保留决定记录。do/later/drop 需要用户原话及来源。
+- **完成与重开**：done 必须带非空 evidence，可由 assistant 基于实际证据记完成，不捏造用户确认；若附用户原话，照样核验。reopen 将 parked/dropped/done 设为 open，需要明确用户原话。dropped/done 要再选 do/later/drop，先显式 reopen。
+- **默认可见性**：list 默认显示 open/decided 并返回各态计数；show/continue 返回卡片、来源、决定记录及引用 HANDOFF 的存在性和修改时间，不读取其内容、不执行任务。写入后读取回执并 show 确认，才可说已记下。
+- **历史已审**：discover 只读，不自动 seen；当前 AI 完整审阅会话内容版本后显式 seen。相同版本下次跳过，内容变化须重审；分页中更新 seen 可以继续游标，历史内容变化使旧游标失效。当前环境会话默认排除。
+- **历史边界**：普通 discover 每次读取所选 roots 内全部 JSONL，没有扫描缓存；limit/max_chars 仅限制返回页，files 可精确抽样。过滤可识别的 agent/headless、工具、系统、推理及压缩副本；旧格式人类身份不确定保留 legacy/unknown，不声称完整覆盖；本地缺失或删除不可恢复。session-sweep 只读旧 state 作提示，其 checked/closed 不代表事项 done 或会话 seen。
+
+**新增 I/O 契约**：
+- 命令入口为 `thread add/list/show/set/choose/done/reopen/discover/seen`；复杂输入为 UTF-8 JSON 的 --input-file 或 stdin。JSON 输出信封为 ok/data/error/meta；成功 stdout，失败 stderr；退出码 0/1/2 = 成功/运行失败或冲突/输入错误。--ai-help/--help 始终输出帮助文档。
+- add 必需 title/sources；可编辑字段为 title/motivation/confirmed/questions/stopped_at/next_suggestion/paths/handoff。confirmed 是 {said, source} 数组，回读含 verified/verification_note；questions/paths/handoff 为字符串数组，next_suggestion 输入为文本、保存带 AI 标记。
+- source 必需 platform/session/anchor/time/role/excerpt/excerpt_hash，path 可选但原话核验需要它；excerpt_hash = UTF-8 摘录 SHA-256。选择输入为 said/source，said 须逐字包含于用户摘录；done 为 evidence 字符串数组并可附 said/source。
+- discover 可用 roots/files/since/limit/max_chars/cursor/exclude_sessions/sweep_state；返回 sessions/next_cursor/coverage/warnings，消息含 source 与分片范围。seen 必需 platform/session/version。详细调用示例见 skill。
+- 全局库为 `PSTATE_HOME/threads/threads.json`（默认根同旧任务目录），备份为 bak.json，schema=1；事项有稳定 id、rev、state、sources 与 log。旧 tasks/locks 数据与入口继续兼容，无自动迁移。
+- 修改使用版本检查，失败不覆盖损坏或未知结构；主库缺失而备份存在时要求显式恢复。变更命令的 dry-run 与实际执行共用校验及事务路径，不写业务状态，仅可能创建协调锁。替换后读回核验；replaced_unverified 必须先核实际落库，不盲重试。
+
 ## 3. 边界 / 明确不做
-- 只管个人项目；公司仓不加锁、不新建条目。
-- 不记进度：进度和交接归 HANDOFF。
+- 全局事项面向个人讨论与决定，允许无工程；公司事项不自动收录。旧工程任务/锁规则继续独立生效。
+- 不复制施工进度：进度和交接归 HANDOFF；事项的历史停点必须注明截至时间。
 - 经 shell / python / 其他非原生编辑工具落盘的写入看不到：既不占用也不拦，是已知盲区。不做 Stop 时的事后补查（事后才发现、归属不清、用户中断时不触发）。
 - 判断不了两个不同短名的条目是不是同一件事；任务级防重靠 AI 开工前 `claim` 同一条，是软约束。硬拦截只在文件层。
 - 不按超时自动释放、不自动接手：对话日志时间只说明它多久没动。
-- 不在每轮提问时做变化检测，不做带版本号的统一更新入口。
+- 不后台扫描、不暗调额外模型、不做 GUI、不自动执行事项或全量导入历史；旧施工看板不增加每轮变化检测。
 - 不进 git、不进 hub 长期记忆；不做跨机器同步。
-- v0.2 锁只覆盖 Claude Code；Codex 侧只有会话开始注入。
+- 锁仍只覆盖 Claude Code；Codex 可用全局 thread CLI/skill 与开始注入壳，未实现施工锁。
 
 ## 4. 硬约束 + 重构自由声明
-- 状态放仓库外本机目录，按 git common dir 识别同一仓库；所有 worktree 必须落到同一份。
+- 状态放仓库外本机目录；全局事项与工程正交，不依赖 Git。旧工程任务/锁按 git common dir 识别同仓，所有 worktree 落到同一份。
 - 锁的身份挂在会话进程上（进程号 + 进程创建时间），不靠手写认领；"检查冲突 + 登记占用"必须原子。
 - 撞上占用必须拦下（不是只提醒），并给出能让用户做决定的信息。
 - 钩子任何出错（参数错、超时、锁文件忙、认不出会话）都放行：退出 0、不输出，绝不因为它挡住会话。
@@ -75,7 +94,7 @@
 会话开始注入：
 - 时机：主会话启动、恢复、清空、压缩之后。
 - 需要的信息：会话当前目录、会话号。
-- 预期结果：有看板条目或别的活会话时，看板和当前工作区条目全文作为上下文给到模型；没有时无感。只提示，不拦。
+- 预期结果：全局 open/decided 有内容时提示计数及入口，不扫描历史；旧仓库有看板条目或别的活会话时，再注入看板及当前工作区条目。只提示，不拦。
 - 出错时：放行，不输出。
 - 平台缺这项能力时：只能靠 skill 描述触发，手动跑 status。
 
@@ -89,4 +108,5 @@
 | 平台 | 能力范围 | 支持状态 / 降级表现 | 已验证范围 |
 |---|---|---|---|
 | Claude Code | 会话开始注入 + 写入前裁决 + skill | 已支持 | 2026-10-09：单元 + 真 git 端到端（假进程后端）22 条；真实 headless 会话经钩子被拦下并照提示停下问用户、`take` 后重试成功、会话结束后占用释放；真实进程链认出会话进程。尚未经插件安装后的交互会话验证 |
-| Codex | 会话开始注入 + skill | 注入已接线（插件钩子需先在 Codex 里信任）；锁未适配，`claim`/`take`/`release` 在 Codex 会话里不可用 | 未在真实 Codex 会话验证 |
+| Codex | 会话开始注入壳 + skill | 锁未适配，claim/take/release 不可用 | 本批只核脚本及纯翻译，不代表安装后平台钩子已验证 |
+| Claude / Codex 本地历史与全局事项 | thread CLI、纯正文提取、来源核验及选择 | CLI 可脱离 Git；历史覆盖限本地可读样式 | 本批共 68 条测试（旧锁 22、历史 26、事项 20）及 CLI 契约 7 项通过；两平台真实来源卡片在临时库闭环通过。未据此声称安装后 hook 已验证 |

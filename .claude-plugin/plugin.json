@@ -1,9 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "project-state",
-  "displayName": "project-state 会话互斥锁与待办看板",
-  "version": "0.2.0",
-  "description": "个人项目里几个 Claude Code 会话同时干活时的会话互斥锁 + 待办看板。写文件前钩子按相对路径(跨 worktree)登记占用,别的活会话占着就拦下,由 AI 停下问用户等对方还是接手(take);占用挂在会话进程上,窗口关了、会话结束、改动合并进 main 后自动释放。看板条目只放标题/状态/一句目标,进度写项目的 HANDOFF.md。状态放仓库外本机目录(按 git common dir 识别)。公司仓(无蓝图)不加锁、不新建条目。v0.2 锁只覆盖 Claude Code。",
+  "displayName": "project-state 待续回顾与工程协作",
+  "version": "0.3.0",
+  "description": "全局待续回顾：当前会话收录、Claude/Codex 历史正文发现、来源追溯与用户选择；另保留个人工程待办及 Claude 会话文件互斥。回顾不额外调用模型，工程施工进度继续引用 HANDOFF。Codex 不提供文件锁。",
   "author": {
     "name": "xu"
   },

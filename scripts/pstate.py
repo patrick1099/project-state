@@ -438,22 +438,38 @@ def read_hook_input():
     return json.loads(sys.stdin.read() or "{}")
 
 
+def global_thread_hint():
+    from pstate_threads.store import hook_hint
+    try:
+        return hook_hint(state_home(), f'"{sys.executable}" "{Path(__file__).resolve()}"')
+    except Exception:
+        return ""
+
+
 def cmd_hook(args):
     data = read_hook_input()
     cwd = data.get("cwd") or os.getcwd()
+    hint = global_thread_hint()
+    event = data.get("hook_event_name") or "SessionStart"
     if not os.path.isdir(cwd):
+        if hint:
+            emit(event, additionalContext=hint)
         return 0
     try:
         text, raw, parsed, top, sdir, st = build_status(cwd, data.get("session_id", ""))
     except RuntimeError:
+        if hint:
+            emit(event, additionalContext=hint)
         return 0
     others = [sid for sid in st["sessions"] if sid != data.get("session_id")]
     if not raw and not others:
+        if hint:
+            emit(event, additionalContext=hint)
         return 0
     current = [(p, t) for (_, p, t, _), (_, task, _) in zip(raw, parsed)
                if norm(task["fields"].get(FIELD_WORKTREE, "")) == norm(top)]
     ctx = render_hook(text, current, self_cmd(), personal_repo(top, sdir))
-    emit(data.get("hook_event_name") or "SessionStart", additionalContext=ctx)
+    emit(event, additionalContext="\n".join(part for part in (ctx, hint) if part))
     return 0
 
 
@@ -547,9 +563,11 @@ COMMANDS = {"status": cmd_status, "new": cmd_new, "claim": cmd_claim, "release":
 
 
 def build_parser():
-    ap = argparse.ArgumentParser(prog="pstate", description="项目看板：会话互斥锁 + 待办条目")
+    ap = argparse.ArgumentParser(prog="pstate", description="项目看板：会话互斥锁 + 待办条目",
+                                 epilog="LLMs/agents: run 'pstate --ai-help' for usage guidance.")
     ap.add_argument("--cwd", default=os.getcwd(), help="从哪个目录识别仓库（默认当前目录）")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("thread", help="全局待续事项；thread --ai-help 查看结构化契约")
     sub.add_parser("status", help="工作区现场 + 活会话 + 看板条目")
     p = sub.add_parser("new", help="新建看板条目，打印路径（公司仓默认拒绝）")
     p.add_argument("slug")
@@ -574,6 +592,15 @@ def build_parser():
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    routed = argv[2:] if argv[:1] == ["--cwd"] and len(argv) > 2 else argv
+    if routed[:1] == ["thread"]:
+        from pstate_threads.cli import main as thread_main
+        return thread_main(routed[1:], state_home())
+    before = argv[:argv.index("--")] if "--" in argv else argv
+    if "--ai-help" in before:
+        from pstate_threads.cli import main as thread_main
+        return thread_main(["--ai-help"] + (["--json"] if "--json" in before or "json" in before else []), state_home())
     args = build_parser().parse_args(argv)
     try:
         return COMMANDS[args.cmd](args)
@@ -604,7 +631,7 @@ if __name__ == "__main__":
             s.reconfigure(encoding="utf-8")
         except (AttributeError, ValueError):
             pass
-    if any(a in HOOK_COMMANDS for a in sys.argv[1:]):
+    if "thread" not in sys.argv[1:] and any(a in HOOK_COMMANDS for a in sys.argv[1:]):
         sys.exit(run_as_hook(sys.argv[1:]))
     try:
         sys.exit(main())
