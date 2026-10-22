@@ -1,4 +1,4 @@
-# pstate 待续回顾实施交接
+# pstate 待续回顾交付记录（已完成）
 
 ## 已谈定
 
@@ -10,10 +10,10 @@
 - 2026-10-22 · 采纳评审：Claude与Codex适配器提取纯正文并保留原生锚点，排除headless/agent/系统/工具/推理/压缩副本；扫描不等于已审，显式seen对应内容版本，改变重审；混合会话按事项内容筛个人。
 - 2026-10-22 · 用户既有约定：opencode和dsh已停用。本轮误派opencode因外部插件额度失败且无代码改动，已终止路线，改由collaboration执行，无全局配置改动。
 
-## 现场
+## 完成记录（本批无待办）
 
-- 工作树：C:/Users/huawei/Desktop/MyProjects/my-repos/project-state-thread-review，分支 feat/thread-review；实现已冻结，两份 manifest 为 0.3.0。
-- 已实现行为见 CHANGELOG「2026-10-22 0.3.0」。监督报告：全仓 68/68（旧锁 22、历史 26、事项 20），最终原话核验修订后事项 20 条再通过；通用 CLI 契约 7 项通过；两平台真实来源卡片在临时库闭环通过，未写正式库。此处不是安装后宿主 hook 验收。
-- 待监督完成本地集成、安装与回读验收及远程发布；监督已在正常用户环境核验 GitHub 身份为 patrick1099，并确认目标仓库不存在。hub 既有用户授权允许代建 public 插件仓，监督将创建并推送；尚未完成前不能称全发布完成。保留本交接直到发布验收结束。
-- 正式库只授权有限收录本次 pstate 事项和 Rust 内存卡；pstate 在发布未解决时保持 decided，Rust 卡为 open 未决定，不扩大历史导入。正式登记必须用真实用户来源并现场回读。
-- 下一步：监督核对代码冻结哈希与本批文档，再完成授权的本地集成安装、远程建仓推送；根据实际结果更新交接。
+- 实现提交 aafe39e 已快进 main，并推送 https://github.com/patrick1099/project-state；0.3.0 两平台缓存已刷新。监督报告 hub sync --refresh 成功，committed/refreshed/git_clean=true，插件刷新 5 成功、0 失败。
+- 全仓 68/68（旧锁 22、历史 26、事项 20），最终原话核验修订后事项 20 条再通过；通用 CLI 契约 7 项通过；两平台真实来源临时库闭环通过。
+- 两平台缓存均经非 Git 目录的新进程 CLI 读回正式库仅有的两条授权卡片，一条 open、一条 done；continue 前后库哈希不变，未扩大历史导入。
+- 完成卡片的 do 来源 verified=true；done 为 assistant 依据提交、推送、测试及安装证据记录，confirmed=false，没有伪造用户确认。
+- 验证边界：安装后交互 hook 新会话尚未实测；Codex 锁未适配。以上是本批验证范围，不表示发布或安装仍未完成。CLI 读库也需状态目录短锁写权限，受限沙箱 E_PERMISSION 不等于库损坏或自动审批拒绝；正常用户回读已通过。
