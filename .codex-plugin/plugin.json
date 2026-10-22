@@ -1,6 +1,6 @@
 {
   "name": "project-state",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "全局待续回顾：当前会话收录、Claude/Codex 历史正文发现、来源追溯与用户选择；另保留个人工程待办及 Claude 会话文件互斥。回顾不额外调用模型，工程施工进度继续引用 HANDOFF。Codex 不提供文件锁。",
   "skills": "./skills/",
   "hooks": "./hooks/codex.json"
