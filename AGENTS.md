@@ -1,6 +1,6 @@
 # project-state
 
-先读 docs/HANDOFF.md 的有效约定及当前批次，再读 docs/BLUEPRINT.md 对应行为；改动前按主题查 docs/CHANGELOG.md 的取舍。HANDOFF 的历史交付记录不覆盖当前合并约定。
+先读 docs/HANDOFF.md（如有）的有效约定及当前批次，再读 docs/BLUEPRINT.md 对应行为；改动前按主题查 docs/CHANGELOG.md 的取舍。没有 HANDOFF 表示没有进行中的施工；已完成合并的证据入口为 docs/evidence/merge-b2/final-closure.md。
 
 ## 命令
 
