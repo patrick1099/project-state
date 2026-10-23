@@ -1,9 +1,18 @@
 ---
 name: pstate
-description: 全局待续事项回顾与个人工程会话锁。Use when the user asks 回忆以前聊过什么 / 哪些事还能继续 / 继续聊 / 记下来 / 先放着 / 不做了 / 现在有哪些活; proactively capture substantive personal ideas in the current conversation; also use for a pstate lock denial, board injection, claim/take/release. Current AI reviews bounded history and presents resumable cards; no extra model, GUI or automatic full-history import. Progress stays in HANDOFF; company matters are not automatically captured.
+description: 全局待续事项回顾与个人工程会话锁。Use when the user asks 回忆以前聊过什么 / 哪些事还能继续 / 继续聊 / 记下来 / 先放着 / 不做了 / 现在有哪些活; proactively capture substantive personal ideas in the current conversation; also use for a pstate lock denial, board injection, claim/take/release. Current AI reviews bounded history and captures matters; an explicitly enabled internal sweep retains durable source summaries and unified Obsidian reminders. No GUI or automatic matter import. Progress stays in HANDOFF; company matters are not automatically captured.
 ---
 
 # pstate：待续事项与工程施工
+
+先查真实命令，再操作事项或后台：
+
+```text
+pstate thread --ai-help
+pstate thread list --all --json
+pstate sweep --ai-help
+pstate sweep status --json
+```
 
 用户要的是找回值得继续的事情，再决定是否推进。**全局事项 thread** 可以是一段已有实质内容的想法、讨论、决定或待办，关联 0..N 个工程路径，也能完全没有 Git 仓库。**旧 tasks/locks** 仍按仓库管理施工认领与文件占用。不要把旧版“只记还没开始的待办”误套到全局事项。
 
@@ -30,7 +39,27 @@ add 创建 open，追加来源不改变已有状态；新来源绝不自动重�
 
 普通 roots 模式每次读取选中目录的全部 JSONL，limit/max_chars 仅限制返回页，没有扫描缓存。只想精确抽样用 files。现代/旧格式的人类来源可信度不同，legacy/unknown 必须保留不确定；headless、agent、系统、工具、推理及可识别的压缩副本会过滤，但未知样式不能凭空恢复。本地缺失或删除记录不可找回。当前环境的 CODEX_THREAD_ID / CLAUDE_CODE_SESSION_ID 自动排除，另可传 exclude_sessions。
 
-session-sweep 只允许可选只读旧 state 提示；不调用其 run/no-judge，不修改旧库。它的 checked/closed 是旧会话摘要的关闭，不能当作事项 done，也不能当作整会话 seen。
+旧 session-sweep 独立入口已退役，使用 pstate sweep。导入摘要是永久来源资料；旧 checked/closed 只关闭该版本提醒，不能当作事项 done 或整会话 seen。后台 AI 判完成/放弃仍默认隐藏，完整内容可由 sources 找回；这个筛选不写事项状态或 seen。
+
+## 多事项审阅：冻结计划后保存
+
+历史会话可能拆成多个事项。读完本次声明的全部正文后，把审阅固定为 UTF-8 JSON，调用 `pstate sweep review --input-file review.json --dry-run --json`，检查预演后去掉 --dry-run 实际保存。
+
+计划只有 platform、session、review_version、files、items、complete 六项。前三项取真实 discover；files 为平台注册名到原生日志路径数组的映射，必须含当前平台。items 每项为 `{"payload":<原 thread add JSON>}`，追加已有事项可附 into/rev，真正另一个事项才显式 distinct=true。每项必须包含该会话真实 source。files 只限定读范围，不扩大用户原话确认的信任。
+
+写前校验全部输入及原文版本，逐项保存并独立回读；只有 complete=true 且全部成功才最后 seen。完整读完且无事项时允许空 items。未读完填 complete=false；部分关联仍显示“已关联N项，余部未审”。失败先检查回执 saved/pending 及 thread show，保留原计划、原 payload/into/rev/distinct 重放，不能重新起名、重拆或盲加 distinct。来源版本变化先重新 discover；未核实落库不能盲重试。
+
+## 内部后台与联合页
+
+`pstate sweep` 提供 run/status/sources/review/import-legacy/reconcile/switch/rollback/install-task/uninstall-task。先读 `pstate sweep --ai-help`；正式切换流程见 [b2 命令清单](../../docs/evidence/merge-b1/b2-commands.md)。安装或发布不会自动导入、启用 writer。
+
+- 来源资料位于 PSTATE_HOME/sweep/sources.json，永久保存摘要、判断、错误、关闭与导入旧页；原文消失标不可用，保留内容。sources 包含默认隐藏的旧完成/放弃、公司与失败来源，输出可能很大，按需本地对账。
+- review_version 是正文 hash，activity_version 含工具活动；seen 只认正文版本。旧时间戳关闭映射首次固定，新工具活动即使同时间戳也不能继承旧勾。
+- 联合页显示完整事项与待审来源。勾选只关该版本整条提醒（含未识别余部），不写状态/seen；新来源不重开 parked/dropped/done。写页前最后吸收全部页勾选，保留周归档与取消恢复语义。
+- 后台仅显式 switch 后运行，策略只改 sweep.toml。模型 safe-mode、预算、超时与失败上限沿配置；Codex 只有交互发现，不承诺后台自答。SessionStart 仍只轻提示。
+- run --no-judge 不调用模型；dry-run 共用归属和写入闸，不写业务资料或页面。不同状态根对同一物理输出也互斥，不绕锁或归属拒绝。
+- import-legacy/reconcile 读取显式旧 state/out；switch 显式启用，未知旧 run.lock 直接拒绝，不能按年龄删。rollback 吸收当前勾选后暂停，保留新数据，不恢复旧快照/旧 writer；用 switch 前向恢复。
+- 任务只从稳定活源注册，worktree/版本缓存即使 dry-run 也拒绝。明文 pyw 固定绝对 Python，无窗口并保留退出码；last_launch.log 是诊断，不是成功验收。真实计划任务触发和安装后交互 hook 需另验。
 
 ## 四个选择与完成
 

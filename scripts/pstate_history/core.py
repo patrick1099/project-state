@@ -10,7 +10,11 @@ DEFAULT_ROOTS = {
     "claude": (Path.home() / ".claude" / "projects",),
     "codex": (Path.home() / ".codex" / "sessions", Path.home() / ".codex" / "archived_sessions"),
 }
-PLATFORMS = {"claude": {"parse": claude.parse, "imports": True, "sweep_hints": True}, "codex": {"parse": codex.parse}}
+PLATFORMS = {
+    "claude": {"parse": claude.parse, "parse_all": claude.parse_all, "imports": True,
+               "sweep_hints": True, "background": True},
+    "codex": {"parse": codex.parse, "parse_all": codex.parse_all, "background": False},
+}
 
 
 def roots_for(options, platform):
@@ -83,12 +87,9 @@ def _position(cursor, snapshot):
         raise ValueError("Invalid or stale history cursor: %s" % exc) from exc
 
 
-def discover(options=None):
+def load_sessions(options=None, include_excluded=False):
+    """Read selected native logs once; consumers share summaries and identities."""
     options = options or {}
-    limit = options.get("limit", 20)
-    max_chars = options.get("max_chars", 24000)
-    if type(limit) is not int or limit < 1 or type(max_chars) is not int or max_chars < 1:
-        raise ValueError("limit and max_chars must be positive integers")
     warnings = []
     counts = {key: 0 for key in ("files", "unreadable", "missing_roots", "malformed_lines", "unknown", "legacy", "excluded", "seen", "unreviewed", "truncated", "gone")}
     sessions = []
@@ -103,9 +104,21 @@ def discover(options=None):
             paths = enumerate_paths(roots, warnings, counts)
         counts["files"] += len(paths)
         files = [(str(path), read_rows(path, warnings, counts)) for path in paths]
-        sessions.extend(adapter["parse"](files, warnings, counts))
+        parser = adapter.get("parse_all", adapter["parse"]) if include_excluded else adapter["parse"]
+        sessions.extend(parser(files, warnings, counts))
         if adapter.get("imports") and "files" not in options:
             import_hints(roots, warnings)
+    return {"sessions": sessions, "coverage": counts, "warnings": warnings}
+
+
+def discover(options=None):
+    options = options or {}
+    limit = options.get("limit", 20)
+    max_chars = options.get("max_chars", 24000)
+    if type(limit) is not int or limit < 1 or type(max_chars) is not int or max_chars < 1:
+        raise ValueError("limit and max_chars must be positive integers")
+    loaded = load_sessions(options)
+    sessions, counts, warnings = loaded["sessions"], loaded["coverage"], loaded["warnings"]
     hints = sweep.hints(options.get("sweep_state"), warnings)
     counts["gone"] = sum(bool(h.get("gone")) for h in hints.values())
     excluded = set(options.get("exclude_sessions") or ())
@@ -143,7 +156,7 @@ def discover(options=None):
         if mi >= len(messages):
             raise ValueError("Cursor message outside available session")
         start = [mi, offset]
-        package = {key: value for key, value in session.items() if key not in {"messages", "reviewed"}}
+        package = {key: value for key, value in session.items() if key not in {"messages", "reviewed", "summary"}}
         package["messages"] = []
         package["sources"] = []
         while mi < len(messages) and remaining:

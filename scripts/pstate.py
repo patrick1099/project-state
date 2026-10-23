@@ -568,6 +568,7 @@ def build_parser():
     ap.add_argument("--cwd", default=os.getcwd(), help="从哪个目录识别仓库（默认当前目录）")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("thread", help="全局待续事项；thread --ai-help 查看结构化契约")
+    sub.add_parser("sweep", help="内部后台与联合回顾页；sweep --ai-help 查看契约")
     sub.add_parser("status", help="工作区现场 + 活会话 + 看板条目")
     p = sub.add_parser("new", help="新建看板条目，打印路径（公司仓默认拒绝）")
     p.add_argument("slug")
@@ -594,6 +595,9 @@ def build_parser():
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     routed = argv[2:] if argv[:1] == ["--cwd"] and len(argv) > 2 else argv
+    if routed[:1] == ["sweep"]:
+        from pstate_sweep.cli import main as sweep_main
+        return sweep_main(routed[1:], state_home())
     if routed[:1] == ["thread"]:
         from pstate_threads.cli import main as thread_main
         return thread_main(routed[1:], state_home())

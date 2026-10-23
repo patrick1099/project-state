@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from datetime import datetime
 
 
 def object_value(value):
@@ -85,4 +86,38 @@ def finish(platform, sid, messages, warnings, legacy=False):
         warnings.append({"kind": "legacy", "platform": platform, "session": sid, "reason": "Human provenance is incomplete; source verification remains unavailable."})
     if any(not m["native_anchor"] for m in ordered):
         warnings.append({"kind": "fallback_anchor", "platform": platform, "session": sid})
-    return {"platform": platform, "session": sid, "version": version, "messages": ordered, "legacy": legacy, "paths": sorted({m["path"] for m in ordered}), "earliest_time": min((m["time"] for m in ordered if m["time"]), default=None), "latest_time": max((m["time"] for m in ordered if m["time"]), default=None)}
+    return {"platform": platform, "session": sid, "version": version, "review_version": version, "messages": ordered, "legacy": legacy, "paths": sorted({m["path"] for m in ordered}), "earliest_time": min((m["time"] for m in ordered if m["time"]), default=None), "latest_time": max((m["time"] for m in ordered if m["time"]), default=None)}
+
+
+def parse_ts(stamp):
+    if not isinstance(stamp, str):
+        return None
+    try:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (ValueError, OverflowError):
+        return None
+
+
+def clip(text, limit=1500):
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[:limit] + "\u2026"
+
+
+def with_activity(session, summary, activities, rows, interactive, headless=False):
+    """Keep body review and native activity independent, including archive copies."""
+    events = {json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")) for event in activities}
+    activity_version = digest(json.dumps(sorted(events), ensure_ascii=False, separators=(",", ":")))
+    identity = session["platform"] + ":" + session["session"]
+    recap, last = summary.get("recap"), summary.get("last_ts")
+    summary.update(
+        platform=session["platform"], native_session=session["session"], identity=identity,
+        review_version=session["review_version"], activity_version=activity_version,
+        interactive=bool(interactive), headless=bool(headless),
+        recap_fresh=bool(recap) and last is not None and recap["ts"] >= last,
+    )
+    summary["owner_hints"] = {"cwd": summary.get("cwd") or "", "written": list(summary.get("written") or [])}
+    session.update(identity=identity, activity_version=activity_version,
+                   activity_time=summary.get("version"), interactive=bool(interactive),
+                   headless=bool(headless), summary=summary)
+    session["paths"] = sorted({path for path, _, _ in rows})
+    return session

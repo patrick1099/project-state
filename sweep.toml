@@ -1,0 +1,48 @@
+# session-sweep 配置。路径里的 ~ 和 %VAR% 会展开。
+# 改默认模型、阈值、预算只改这里；代码里没有第二份默认值。
+
+[paths]
+# 「悬着的事」页和「已处理」页所在的 Obsidian 专属文件夹
+vault_dir = 'C:\Users\huawei\Desktop\Obsidian Vault\03-悬着的事'
+page_name = "悬着的事.md"
+closed_name = "悬着的事-已处理.md"
+# 超出窗口的按周归档到 vault_dir 下的这个子目录
+archive_dir = "归档"
+installed_plugins = "~/.claude/plugins/installed_plugins.json"
+# 留空 = 从 installed_plugins 里找当前安装的 vibe-flow
+doc_gate = ""
+
+[scan]
+idle_days = 2
+entrypoints = ["cli", "claude-vscode"]
+# 最后对话早于这天（本地日期 YYYY-MM-DD）的会话不看；留空 = 不设下限
+since = "2026-09-01"
+# 主清单和已处理页只放最后对话在这么多天内的；更早的按周归档
+window_days = 7
+
+[owner]
+# 归属判断的说明：公司工作所有页面都不显示，说不清的照常显示
+personal_desc = "用户自己 vibe coding 的个人项目：自己的工具、脚本、插件、skill，vibe-flow、hub、Obsidian、AI 工作流和 Claude/Codex 配置、ai-room、串口助手这类自用工具。"
+work_desc = "公司工作：燃气表/超声波表固件、客户需求与协议适配、技术说明书、公司仓库里的业务代码和测试；公司仓库的分支同步、合并、历史重写、备份清理等 git 操作；公司的征文、汇报、文档等文字材料。"
+# 路径里含这些片段的视为个人项目的线索（只作参考，最终由判断器按事情内容定）
+personal_paths = ["my-repos", "treasury-vault", "~/.claude", "Obsidian Vault", "~/.hub", "ai-room"]
+
+[judge]
+claude_cmd = "claude"
+# 有新鲜 recap 时只做短分类
+recap_model = "haiku"
+# 没有 recap 时让会话带着自己的上下文回答
+resume_model = "sonnet"
+timeout_s = 300
+budget_usd_per_call = 2.0
+# 单次运行最多调用几次 claude；积压的会话下次继续
+max_calls = 20
+# 同一会话同一对话版本累计失败几次后不再自动重试（会话有新对话后重新计数）
+max_failures = 3
+
+[schedule]
+task_name = "session-sweep"
+interval_hours = 4
+
+[history.roots]
+claude = ["~/.claude/projects"]

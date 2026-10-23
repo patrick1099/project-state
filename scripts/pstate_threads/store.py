@@ -49,10 +49,12 @@ def write_json(path, value):
 
 
 def mutate(directory, op, payload, *, ident=None, rev=None, into=None, distinct=False,
-           verified=None, dry_run=False):
+           verified=None, dry_run=False, preview_state=None):
     directory = Path(directory)
     with pstate_lock.mutex(directory):
-        previous = load(directory)
+        if preview_state is not None and not dry_run:
+            raise ThreadError('preview_state requires dry_run')
+        previous = validate_state(copy.deepcopy(preview_state)) if preview_state is not None else load(directory)
         updated = copy.deepcopy(previous)
         result = evolve(updated, op, payload, datetime.now(timezone.utc).isoformat(),
                         ident or uuid.uuid4().hex, rev, into, distinct, verified)
@@ -60,6 +62,9 @@ def mutate(directory, op, payload, *, ident=None, rev=None, into=None, distinct=
         result['dry_run'] = bool(dry_run)
         result['committed'] = False
         if dry_run or updated == previous:
+            if dry_run and preview_state is not None:
+                preview_state.clear()
+                preview_state.update(copy.deepcopy(updated))
             if 'id' in result:
                 result['item'] = copy.deepcopy(updated['items'][result['id']])
             return result
