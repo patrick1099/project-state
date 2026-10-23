@@ -1,6 +1,6 @@
 {
   "name": "project-state",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "全局待续回顾：当前会话收录、Claude/Codex 历史正文发现、来源追溯与用户选择；合并 session-sweep 后台判断、联合回顾页和显式迁移切换。事项由用户决定，施工进度继续引用 HANDOFF；Codex 仅交互发现，不提供后台自答或文件锁。",
   "skills": "./skills/",
   "hooks": "./hooks/codex.json"
