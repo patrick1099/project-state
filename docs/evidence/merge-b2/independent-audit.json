@@ -1,0 +1,91 @@
+{
+  "conclusion": "PASS for released artifacts, formal migration/switch and one naturally completed default scheduled-task instance; explicit future-trigger/host-hook limits remain",
+  "phase": "final-independent-audit-passed",
+  "created": "2026-10-23T08:09:33.136154+00:00",
+  "final_created": "2026-10-23T08:16:15.343311+00:00",
+  "private_full_audit_path": "C:\\Users\\huawei\\AppData\\Local\\pstate-merge-backups\\20261023-154713\\private-audit-evidence\\independent-audit.json",
+  "private_full_audit_sha256": "7d7eebf3e969425cd1316982a404960f19ab0b9b5ab8c4c00d4aedcde0feaf08",
+  "backup_files_verified": 31,
+  "all_backup_files_equal": true,
+  "original_records_verified": 168,
+  "all_full_original_records_equal": true,
+  "original_closures_verified": 15,
+  "all_original_closures_and_mapping_equal": true,
+  "pages": [
+    {
+      "index": 1,
+      "characters": 1700,
+      "original_utf8_sha256": "2264d28cf2e74f7603663ecee53a4078f62c2a28bea4222f2beabe2ebfa8b040",
+      "legacy_pages_exact": true,
+      "legacy_import_pages_exact": true,
+      "original_path_exists": true
+    },
+    {
+      "index": 2,
+      "characters": 2810,
+      "original_utf8_sha256": "0aba240beb770f96c9e1337a84998bfe401d77ee88f992a5929d48d2cecda137",
+      "legacy_pages_exact": true,
+      "legacy_import_pages_exact": true,
+      "original_path_exists": true
+    },
+    {
+      "index": 3,
+      "characters": 790,
+      "original_utf8_sha256": "8466dfc1e8612f65c86407efbc0f14aaf179421fdb54f6261757ec2439108f06",
+      "legacy_pages_exact": true,
+      "legacy_import_pages_exact": true,
+      "original_path_exists": true
+    },
+    {
+      "index": 4,
+      "characters": 1051,
+      "original_utf8_sha256": "f9cf344fe92a3e316e77f5d3e15a22e99325778e4fb281574ff3c2da56e0c370",
+      "legacy_pages_exact": true,
+      "legacy_import_pages_exact": true,
+      "original_path_exists": true
+    },
+    {
+      "index": 5,
+      "characters": 2659,
+      "original_utf8_sha256": "39c1dc8376ce383e1baafe54125829c34bad28ca0aa604cd9c3b3d141d0fadae",
+      "legacy_pages_exact": true,
+      "legacy_import_pages_exact": true,
+      "original_path_exists": true
+    },
+    {
+      "index": 6,
+      "characters": 1931,
+      "original_utf8_sha256": "84787baf73e3fa29295c6a06ba3ce9f2c051156d65eb005ace62aeeece64e4a2",
+      "legacy_pages_exact": true,
+      "legacy_import_pages_exact": true,
+      "original_path_exists": true
+    },
+    {
+      "index": 7,
+      "characters": 6275,
+      "original_utf8_sha256": "39abda118e874ed82ce7423195896e8c7aec23a2d499b6ac4caa593315607bd6",
+      "legacy_pages_exact": true,
+      "legacy_import_pages_exact": true,
+      "original_path_exists": true
+    }
+  ],
+  "original_policy_sections_equal": {
+    "scan": true,
+    "owner": true,
+    "judge": true,
+    "schedule": true
+  },
+  "threads_bytes_unchanged": true,
+  "legacy_state_bytes_unchanged": true,
+  "final_threads_count": 2,
+  "final_seen_count": 0,
+  "final_source_count": 211,
+  "post_switch_files_verified": 16,
+  "post_switch_all_bytes_equal": true,
+  "limitations": [
+    "future natural login and 4h triggers not observed",
+    "post-install fresh host hooks not observed",
+    "b1 tests are historical isolated validation, not rerun formal acceptance"
+  ],
+  "private_details_not_published": true
+}

@@ -1,0 +1,12 @@
+{
+  "observed": "2026-10-23T16:11:59.7327551+08:00",
+  "state": "Ready",
+  "enabled": true,
+  "lastRun": "2026-10-23T16:08:08+08:00",
+  "lastResult": 0,
+  "nextRun": "2026-10-23T20:08:08+08:00",
+  "stable_launcher_verified": true,
+  "default_run_verified": true,
+  "private_full_readback_path": "C:\\Users\\huawei\\AppData\\Local\\pstate-merge-backups\\20261023-154713\\private-audit-evidence\\task-finished.json",
+  "private_full_readback_sha256": "f0210f65d1f13dd037a60795f04cf9bc3ca6923c6ea92ed2fa9e427c8d056535"
+}

@@ -1,0 +1,10 @@
+{
+  "plugin": {
+    "enabled": true
+  },
+  "marketplace": {
+    "last_updated": "2026-09-30T08:51:31Z",
+    "source_type": "local",
+    "source": "\\\\?\\C:\\Users\\huawei\\treasury-vault\\shared\\plugins\\project-state"
+  }
+}

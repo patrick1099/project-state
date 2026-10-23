@@ -1,0 +1,40 @@
+[
+  {
+    "entry": [
+      "C:\\Users\\huawei\\Desktop\\MyProjects\\my-repos\\session-sweep\\sweep.py",
+      "run",
+      "--no-judge"
+    ],
+    "exit": 1,
+    "refused": true
+  },
+  {
+    "entry": [
+      "C:\\Users\\huawei\\Desktop\\MyProjects\\my-repos\\session-sweep\\run_hidden.pyw",
+      "run",
+      "--no-judge"
+    ],
+    "exit": 1,
+    "refused": true
+  },
+  {
+    "entry": "session_sweep.adapters.store.save_state",
+    "refused": true
+  },
+  {
+    "entry": "session_sweep.adapters.store.write_atomic",
+    "refused": true
+  },
+  {
+    "entry": "session_sweep.adapters.store.write_page_if_changed",
+    "refused": true
+  },
+  {
+    "entry": "session_sweep.cli.run_sweep",
+    "refused": true
+  },
+  {
+    "entry": "session_sweep.cli.write_pages",
+    "refused": true
+  }
+]

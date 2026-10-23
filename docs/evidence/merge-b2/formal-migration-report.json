@@ -1,0 +1,55 @@
+{
+  "steps": [
+    {
+      "step": "01-import-dry",
+      "exit": 0,
+      "dry_run": true,
+      "phase": null
+    },
+    {
+      "step": "02-import",
+      "exit": 0,
+      "dry_run": false,
+      "phase": null
+    },
+    {
+      "step": "03-reconcile-dry",
+      "exit": 0,
+      "dry_run": true,
+      "phase": null
+    },
+    {
+      "step": "04-reconcile",
+      "exit": 0,
+      "dry_run": false,
+      "phase": null
+    },
+    {
+      "step": "05-switch-dry",
+      "exit": 0,
+      "dry_run": true,
+      "phase": "preview"
+    },
+    {
+      "step": "06-switch",
+      "exit": 0,
+      "dry_run": false,
+      "phase": "enabled"
+    },
+    {
+      "step": "07-status",
+      "exit": 0,
+      "dry_run": null,
+      "phase": null
+    }
+  ],
+  "all_original_records_fields_and_unknowns_equal": true,
+  "original_full_pages_equal_in_legacy_pages": 7,
+  "original_paths_exist": true,
+  "threads_and_seen_bytes_unchanged": true,
+  "original_legacy_state_bytes_unchanged": true,
+  "activation_enabled": true,
+  "source_count": 168,
+  "private_full_report_path": "C:\\Users\\huawei\\AppData\\Local\\pstate-merge-backups\\20261023-154713\\private-audit-evidence\\formal-migration-report.json",
+  "private_full_report_sha256": "9c0c46662655c705ff96531a0e7a626e485f5412ee60c90c17a22405b91cb520"
+}

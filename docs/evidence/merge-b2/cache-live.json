@@ -1,0 +1,64 @@
+[
+  {
+    "platform": ".claude",
+    "cache": "C:\\Users\\huawei\\.claude\\plugins\\cache\\project-state\\project-state\\0.4.0",
+    "version": "0.4.0",
+    "runtime_files_equal": 28,
+    "new_process_checks": [
+      {
+        "args": [
+          "--help"
+        ],
+        "exit": 0,
+        "stdout_chars": 1211
+      },
+      {
+        "args": [
+          "sweep",
+          "--ai-help"
+        ],
+        "exit": 0,
+        "stdout_chars": 4304
+      },
+      {
+        "args": [
+          "thread",
+          "--ai-help"
+        ],
+        "exit": 0,
+        "stdout_chars": 4033
+      }
+    ]
+  },
+  {
+    "platform": ".codex",
+    "cache": "C:\\Users\\huawei\\.codex\\plugins\\cache\\project-state\\project-state\\0.4.0",
+    "version": "0.4.0",
+    "runtime_files_equal": 28,
+    "new_process_checks": [
+      {
+        "args": [
+          "--help"
+        ],
+        "exit": 0,
+        "stdout_chars": 1211
+      },
+      {
+        "args": [
+          "sweep",
+          "--ai-help"
+        ],
+        "exit": 0,
+        "stdout_chars": 4304
+      },
+      {
+        "args": [
+          "thread",
+          "--ai-help"
+        ],
+        "exit": 0,
+        "stdout_chars": 4033
+      }
+    ]
+  }
+]

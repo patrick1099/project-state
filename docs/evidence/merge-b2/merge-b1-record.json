@@ -1,0 +1,101 @@
+{
+  "next": [
+    "merge-b1 ready: P200/200 CLI7/7 and unchanged S47; doc fingerprints/encryption passed; all child workers completed",
+    "Root host/ready audit then next supervisor handles b2 integration/release/formal backup-migration-switch; no b2 action performed"
+  ],
+  "docs": "done",
+  "supervisor": "/root/merge_b1_supervisor",
+  "batch": "merge-b1",
+  "outcome": "complete",
+  "baseline": "P 4921f7858ab2; existing docs/HANDOFF.md only; S d28f7e7 clean",
+  "workspace": "C:/Users/huawei/Desktop/MyProjects/my-repos/project-state-sweep-merge",
+  "tasks": [
+    {
+      "evidence": [
+        "docs/evidence/merge-b1/events.md",
+        "docs/evidence/merge-b1/validation.md"
+      ],
+      "state": "verified",
+      "acceptance": "shared adapters retain body/activity versions, recap owner and successful-write metadata; regression fixtures pass",
+      "id": "events"
+    },
+    {
+      "evidence": [
+        "docs/evidence/merge-b1/backend.md",
+        "docs/evidence/merge-b1/input-gates-fix.md",
+        "docs/evidence/merge-b1/validation.md"
+      ],
+      "state": "verified",
+      "acceptance": "internal sweep migrated; unified pages and item/source link semantics; isolated CLI no-model paths",
+      "id": "backend"
+    },
+    {
+      "evidence": [
+        "docs/evidence/merge-b1/migration.md",
+        "docs/evidence/merge-b1/validation.md"
+      ],
+      "state": "verified",
+      "acceptance": "explicit import/reconcile/switch/rollback, ownership and cross-process page locks, retry identity, compatibility and hidden runner",
+      "id": "migration"
+    },
+    {
+      "acceptance": "frozen multi-item review readback then seen-last; S retired entry and stable hidden runner safe forwarding/rejection and exit codes",
+      "evidence": [
+        "docs/evidence/merge-b1/capture-compat.md",
+        "docs/evidence/merge-b1/validation.md"
+      ],
+      "id": "capture-compat",
+      "state": "verified"
+    },
+    {
+      "evidence": [
+        "docs/evidence/merge-b1/validation.md",
+        "tests/test_sweep_independent.py"
+      ],
+      "state": "verified",
+      "acceptance": "isolated CLI regression and adversarial acceptance suite, config/adapter checks, encryption check",
+      "id": "independent-validation"
+    },
+    {
+      "evidence": [
+        "docs/evidence/merge-b1/documentation.md",
+        "docs/evidence/merge-b1/b2-commands.md",
+        "docs/evidence/merge-b1/final-checks.md"
+      ],
+      "state": "verified",
+      "acceptance": "docs reflect implemented behavior; code fingerprints unchanged during doc fork",
+      "id": "documentation"
+    }
+  ],
+  "workers": [
+    {
+      "state": "done",
+      "id": "/root/merge_b1_supervisor/route_probe"
+    },
+    {
+      "state": "done",
+      "id": "/root/merge_b1_supervisor/events_impl"
+    },
+    {
+      "id": "/root/merge_b1_supervisor/backend_impl",
+      "state": "done"
+    },
+    {
+      "state": "done",
+      "id": "/root/merge_b1_supervisor/migration_impl"
+    },
+    {
+      "id": "/root/merge_b1_supervisor/capture_compat_impl",
+      "state": "done"
+    },
+    {
+      "state": "done",
+      "id": "/root/merge_b1_supervisor/independent_validation"
+    },
+    {
+      "state": "done",
+      "id": "/root/merge_b1_supervisor/documentation"
+    }
+  ],
+  "schema": 1
+}

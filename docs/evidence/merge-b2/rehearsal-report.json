@@ -1,0 +1,85 @@
+{
+  "steps": [
+    {
+      "step": "01-import-dry",
+      "exit": 0,
+      "dry_run": true,
+      "phase": null
+    },
+    {
+      "step": "02-import",
+      "exit": 0,
+      "dry_run": false,
+      "phase": null
+    },
+    {
+      "step": "03-reconcile-dry",
+      "exit": 0,
+      "dry_run": true,
+      "phase": null
+    },
+    {
+      "step": "04-reconcile",
+      "exit": 0,
+      "dry_run": false,
+      "phase": null
+    },
+    {
+      "step": "05-switch-dry",
+      "exit": 0,
+      "dry_run": true,
+      "phase": "preview"
+    },
+    {
+      "step": "06-switch",
+      "exit": 0,
+      "dry_run": false,
+      "phase": "enabled"
+    },
+    {
+      "step": "07-rollback-dry",
+      "exit": 0,
+      "dry_run": true,
+      "phase": "paused"
+    },
+    {
+      "step": "08-rollback",
+      "exit": 0,
+      "dry_run": false,
+      "phase": "paused"
+    },
+    {
+      "step": "10-forward-dry",
+      "exit": 0,
+      "dry_run": true,
+      "phase": "preview"
+    },
+    {
+      "step": "11-forward",
+      "exit": 0,
+      "dry_run": false,
+      "phase": "enabled"
+    },
+    {
+      "step": "12-uncheck-reconcile",
+      "exit": 0,
+      "dry_run": false,
+      "phase": null
+    },
+    {
+      "step": "13-switch-after-uncheck",
+      "exit": 0,
+      "dry_run": false,
+      "phase": "enabled"
+    }
+  ],
+  "all_168_original_records_preserved": true,
+  "all_7_original_full_pages_preserved": true,
+  "items_seen_bytes_unchanged": true,
+  "checked_then_rollback_forward_preserved": true,
+  "uncheck_then_forward_preserved": true,
+  "paused_run_exit": 1,
+  "formal_data_written": false,
+  "private_full_report_path": "C:\\Users\\huawei\\AppData\\Local\\pstate-merge-backups\\20261023-154713\\private-audit-evidence\\rehearsal-report.json",
+  "private_full_report_sha256": "d1414aee01a1cc38c59d10c4e65b0728bd00635e0869893674b2251f4ef1e4dc"
+}

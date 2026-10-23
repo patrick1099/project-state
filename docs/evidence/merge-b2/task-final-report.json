@@ -1,0 +1,42 @@
+{
+  "finished": "2026-10-23T16:11:59.7327551+08:00",
+  "task_result": 0,
+  "launcher_exit": 0,
+  "default_run_dry_run": false,
+  "calls": 20,
+  "failures": 0,
+  "discarded": 0,
+  "planned": 36,
+  "listed": 2,
+  "closed_listed": 0,
+  "archived": 38,
+  "source_count": 211,
+  "coverage": {
+    "files": 168,
+    "unreadable": 0,
+    "missing_roots": 0,
+    "malformed_lines": 0,
+    "unknown": 3,
+    "legacy": 17,
+    "excluded": 15,
+    "seen": 0,
+    "unreviewed": 0,
+    "truncated": 0,
+    "gone": 0
+  },
+  "warning_kinds": {
+    "unknown": 3,
+    "legacy": 17
+  },
+  "original_168_full_material_unchanged": true,
+  "original_7_full_pages_unchanged_in_legacy_pages": true,
+  "threads_seen_and_old_state_bytes_unchanged": true,
+  "owner_activation_match": true,
+  "post_switch_snapshot": "C:\\Users\\huawei\\AppData\\Local\\pstate-merge-backups\\20261023-154713\\post-switch",
+  "source_versions": {
+    "C:\\Users\\huawei\\treasury-vault\\shared\\plugins\\project-state": "9e45c08b695c5be77028b3e8a3ae142dc9ec0ce5",
+    "C:/Users/huawei/Desktop/MyProjects/my-repos/session-sweep": "05c2809860bf512221741cc54cfcfd0f6278decf"
+  },
+  "future_login_4hour_trigger_observed": false,
+  "new_host_interactive_hook_observed": false
+}

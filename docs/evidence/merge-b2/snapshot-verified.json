@@ -1,0 +1,15 @@
+{
+  "backup": "C:\\Users\\huawei\\AppData\\Local\\pstate-merge-backups\\20261023-154713",
+  "verified_files": 31,
+  "legacy_sessions": 168,
+  "legacy_closures": 15,
+  "thread_items": 2,
+  "thread_seen": 0,
+  "legacy_top_fields": [
+    "version",
+    "sessions",
+    "last_run",
+    "closures"
+  ],
+  "page_files": 7
+}
