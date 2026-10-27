@@ -1,6 +1,6 @@
 ---
 name: pstate
-description: 全局待续事项回顾与个人工程会话锁。Use when the user asks 回忆以前聊过什么 / 哪些事还能继续 / 继续聊 / 记下来 / 先放着 / 不做了 / 现在有哪些活; proactively capture substantive personal ideas in the current conversation; also use for a pstate lock denial, board injection, claim/take/release. Current AI reviews bounded history and captures matters; an explicitly enabled internal sweep retains durable source summaries and unified Obsidian reminders. No GUI or automatic matter import. Progress stays in HANDOFF; company matters are not automatically captured.
+description: 全局待续事项回顾与个人工程会话锁。Use when the user asks 回忆以前聊过什么 / 哪些事还能继续 / 继续聊 / 记下来 / 先放着 / 不做了 / 现在有哪些活; proactively capture substantive personal ideas in the current conversation; also use for a pstate lock denial, claiming an Obsidian task directory (claim/take/release), or handing a decided matter over to an Obsidian task (thread transfer). Current AI reviews bounded history and captures matters; an explicitly enabled internal sweep retains durable source summaries and unified Obsidian reminders. No GUI or automatic matter import. Progress stays in HANDOFF; company matters are not automatically captured.
 ---
 
 # pstate：待续事项与工程施工
@@ -14,9 +14,17 @@ pstate sweep --ai-help
 pstate sweep status --json
 ```
 
-用户要的是找回值得继续的事情，再决定是否推进。**全局事项 thread** 可以是一段已有实质内容的想法、讨论、决定或待办，关联 0..N 个工程路径，也能完全没有 Git 仓库。**旧 tasks/locks** 仍按仓库管理施工认领与文件占用。不要把旧版“只记还没开始的待办”误套到全局事项。
+用户要的是找回值得继续的事情，再决定是否推进。**全局事项 thread** 可以是一段已有实质内容的想法、讨论、决定或待办，关联 0..N 个工程路径，也能完全没有 Git 仓库。**thread 只管立项之前**：聊过什么、要不要做；决定做并落进 Obsidian 任务后就转交（transferred），之后由 Obsidian 任务承接。**施工认领**认的是 Obsidian 任务目录，**文件锁**按仓库管文件占用。不要把旧版“只记还没开始的待办”误套到全局事项。
 
-施工进度、失败现场、下一条命令写项目 HANDOFF；thread 保存动机、有效结论、未定问题、带时间的历史停点、来源与 HANDOFF 引用。记忆只存长期结论。公司事项不自动收录，混合会话按具体内容判断，不能按启动 cwd 一刀切。
+| 位置 | 承担什么 |
+|---|---|
+| thread | 待决定、待承接的事项，以及来源和历史讨论 |
+| Obsidian 任务目录（…/task/Tnn-名称） | 要解决什么、采用什么方案、验收要求和长期结论 |
+| 项目 HANDOFF | 当前未完施工的现场、阻塞、验证情况和下一步 |
+| Obsidian 项目 README | 一句概况和当前有效入口 |
+| 03-悬着的事 | 后台自动生成的回顾入口，勾选只关闭提醒 |
+
+施工进度、失败现场、下一条命令写项目 HANDOFF；thread 保存动机、有效结论、未定问题、带时间的历史停点、来源与 HANDOFF 引用，转交后不再回填施工状态。记忆只存长期结论。公司事项不自动收录，混合会话按具体内容判断，不能按启动 cwd 一刀切。
 
 ## 当前会话：实质想法当场接住
 
@@ -70,9 +78,19 @@ add 创建 open，追加来源不改变已有状态；新来源绝不自动重�
 | 先放着 | thread choose ID later --rev N --input-file choice.json --json | 记为 parked，默认列表隐藏，可用 list --state parked 或 list --all 找回 |
 | 不做了 | thread choose ID drop --rev N --input-file choice.json --json | 记为 dropped，保留决定及来源 |
 | 已完成 | thread done ID --rev N --input-file done.json --json | 必须有非空 evidence 列表；可由 assistant 依据实际证据记录，不能造用户确认 |
-| 重新打开 | thread reopen ID --rev N --input-file choice.json --json | 将 parked/dropped/done 重新设为 open，须明确用户原话 |
+| 交给 Obsidian 任务 | thread transfer ID --rev N --input-file transfer.json --json | decided → transferred（已转交），记下任务目录；要求让它进入 decided 的那次 do 原话已核验 |
+| 重新打开 | thread reopen ID --rev N --input-file choice.json --json | 将 parked/dropped/done/transferred 重新设为 open（清掉转交目标，历史留在 log），须明确用户原话 |
 
-do/later/drop/reopen 需要 choice.json 的 said/source。said 必须逐字出现在用户 source.excerpt 中。工具核验消息出处，不替 AI 判断这句话是否授权该选择；核验失败仍可能记录选择且 confirmed=false，必须如实说明。不要从讨论热度推断“决定做”。dropped/done 再选 do/later/drop 前必须先 reopen。
+do/later/drop/reopen 需要 choice.json 的 said/source。said 必须逐字出现在用户 source.excerpt 中。工具核验消息出处，不替 AI 判断这句话是否授权该选择；核验失败仍可能记录选择且 confirmed=false，必须如实说明。不要从讨论热度推断“决定做”。dropped/done/transferred 再选 do/later/drop 前必须先 reopen；transferred 也不能直接 done，它的完成由 Obsidian 任务承接。
+
+## 决定做之后：转交给 Obsidian 任务
+
+1. 用户说做 → `choose do`（同一轮可以接着做下面几步，不用用户再确认一次）。do 回执 confirmed=false 时不能转交，先如实告诉用户原话没核验上。
+2. 找承接的 Obsidian 任务：先按库根 AGENTS.md 查能复用的现有项目和 `task/Tnn-名称/`；属于现有项目就在它下面复用或新建任务目录。**没有合适项目就问用户是否立项，AI 不建项目。**
+3. 改这个任务目录里的文档之前先 `pstate claim <任务目录绝对路径>`；新建的目录在写正文前认领。只做交接、暂不开工的，写完可以 release。
+4. 把 thread 的动机、有效结论、未定问题写进该任务的主文档（按库规则复用同用途文档），写完回读。
+5. `thread transfer ID --rev N`，transfer.json 为 `{"to": "<任务目录绝对路径>", "evidence": ["写入 <实际文档路径> 并回读：目标/结论/未决问题"]}`。CLI 只核目录存在且形如 `…/task/Tnn-名称`，内容是否真的交接靠 evidence 如实写。
+6. 之后同一件事的新施工讨论导向那个任务，不另建同义 thread。transfer 不写 seen，也不关同一会话里其他待审来源。
 
 完成 evidence 应可追查，例如实际提交、交付物及验证范围；“测试通过”不等于已安装或实际用户验收。done.json 仅有 evidence 时 actor=assistant；若写 said/source，则同样必须真实核验。continue 不会撤销关闭，只有明确决定才走 reopen。
 
@@ -127,12 +145,12 @@ seen.json 结构：`{"platform":"codex","session":"<返回的会话ID>","version
 
 thread 的 JSON 信封为 ok/data/error/meta；成功在 stdout，失败在 stderr，退出码 0/1/2 分别为成功/运行失败或冲突/输入错误。帮助始终是文档。数据在 PSTATE_HOME（默认本机 LOCALAPPDATA/ai-project-state）的 threads/threads.json；有备份和版本检查。rev 冲突先 show 再重做判断；replaced_unverified 先核落库内容，不盲目重试。
 
-## 旧 tasks/locks：继续兼容
+## 施工认领与文件锁
 
-- `status` 看当前工程 worktree、活会话和待办；`new <短名> --title "<标题>"` 建施工待办，`claim <短名>` 认领，`done <短名>` 归档。这个 done 和全局 thread done 是两个命令。
-- 工程待办关联 HANDOFF，不复制施工进度；跨会话施工可建旧 task，纯讨论只需全局 thread。公司仓不自动新建旧 task，已有遗留任务做完照旧归档。
-- 个人工程按蓝图识别，`lock on|off|auto` 可设置。原生编辑前按仓库相对路径占用，跨 worktree 同路径也互斥；进程结束、会话结束或满足合并清理条件时释放。同进程/祖先会话放行，兄弟 headless 会话仍互斥。
-- 遇到“[pstate 锁]”必须停下，向用户说明占用者、worktree、任务及时间，询问等候还是接手；用户明确接手才 `take <会话号或短名>` 后重试，不用 shell/python 绕过。
-- squash/cherry-pick 合并或放弃施工时 `release`。闲置多久都不是自动接手授权。
-- claim/take/release 只支持有 Claude 会话身份的环境；Codex 锁未实现。shell/python 写入仍是原生编辑锁盲区。
-- 会话开始最多补充全局 open/decided 计数与入口，不后台扫历史。脚本/CLI、纯翻译和历史样本验证不等于安装后宿主钩子已验证。
+- **任务认领（全局，与 git 仓无关）**：`claim <Obsidian 任务目录绝对路径>` 认的是“这件事谁在干”，防同一件事被两个会话各做一遍。存在 PSTATE_HOME/claims/，从哪个目录启动都一样。被拒说明别的活会话在干，停下问用户；用户说接手才 `take <任务目录>`，只转这一项认领。
+- **文件锁（按仓库）**：个人工程按蓝图识别，`lock on|off|auto` 可设置。原生编辑前按仓库相对路径占用，跨 worktree 同路径也互斥；进程结束、会话结束或满足合并清理条件时释放。同进程/祖先会话放行，兄弟 headless 会话仍互斥。文件锁不需要先 claim。
+- 遇到“[pstate 锁]”必须停下，向用户说明占用者、worktree、它认领的任务及时间，询问等候还是接手；用户明确接手才照提示跑 `--cwd <被写文件所在仓库> take <会话号>` 后重试，只转该仓文件占用，不用 shell/python 绕过。
+- `release` 放掉本会话全部任务认领，以及 `--cwd` 所在仓库的文件占用（不在仓库里时会说明文件占用没处理）。squash/cherry-pick 合并或放弃施工时跑。闲置多久都不是自动接手授权。
+- **旧看板已停用**：`new` 一律拒绝（含 --force），要跟踪的活去 Obsidian 建任务。`status` 仍列出待收尾的旧条目，`done <旧短名>` 只是把旧条目移出活跃视图，和 thread done 是两个命令；没做完的旧条目要先把独有信息迁到承接处，再 done 并说明“已迁出”，不能宣称业务完成。
+- claim/take/release 只支持有 Claude 会话身份的环境；Codex 认领与锁未实现。shell/python 写入仍是原生编辑锁盲区。
+- 会话开始只在有别的活会话或别的会话的任务认领时注入现场，另附全局 open/decided 计数；不注入旧条目、不扫历史。脚本/CLI、纯翻译和历史样本验证不等于安装后宿主钩子已验证。

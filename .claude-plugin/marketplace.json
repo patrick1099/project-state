@@ -4,13 +4,13 @@
     "name": "xu"
   },
   "metadata": {
-    "description": "project-state 会话互斥锁与待办看板"
+    "description": "project-state 待续回顾与会话互斥"
   },
   "plugins": [
     {
       "name": "project-state",
       "source": ".",
-      "description": "个人项目的会话互斥锁(写前拦截、跨 worktree)+ 待办看板"
+      "description": "全局待续回顾与转交 + Obsidian 任务认领 + 个人项目文件锁(写前拦截、跨 worktree)"
     }
   ]
 }

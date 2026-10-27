@@ -122,16 +122,30 @@ class LockCoreTest(unittest.TestCase):
     def test_take_transfers_and_warns_old_holder_once(self):
         self.write(A, CHAIN_A, tid="t1")
         L.finish_tool(self.st, "t1", failed=False)
-        self.assertTrue(L.claim_task(self.st, "fix", A, 0)[0])
-        self.assertEqual(L.claim_task(self.st, "fix", B, 0), (False, A["sid"]))
-        self.assertEqual(L.resolve_target(self.st, "fix", B["sid"]), A["sid"])
+        self.assertEqual(L.resolve_target(self.st, "aaaa", B["sid"]), A["sid"])
         info = L.take_over(self.st, A["sid"], B, 0)
-        self.assertEqual((info["moved"], info["task"]), (1, "fix"))
-        self.assertEqual(self.st["sessions"][B["sid"]]["task"], "fix")
+        self.assertEqual(info["moved"], 1)
         d, info = self.write(A, CHAIN_A, rel="other.py", tid="t5")
         self.assertEqual((d, info["kind"]), ("deny", "taken"))
         self.assertEqual(self.write(A, CHAIN_A, rel="other.py", tid="t6")[0], "allow", "被接手的提醒只拦一次")
         self.assertEqual(self.write(A, CHAIN_A, tid="t7")[0], "deny", "转走的文件现在归接手方")
+
+    def test_global_claims(self):
+        claims = {}
+        self.assertEqual(L.claim_global(claims, "k1", A, 1, "C:/V/P/task/T01-a"), (True, A["sid"]))
+        self.assertEqual(L.claim_global(claims, "k1", A, 5), (True, A["sid"]), "本会话重复认领幂等")
+        self.assertEqual((claims["k1"]["since"], claims["k1"]["path"]), (1, "C:/V/P/task/T01-a"))
+        self.assertEqual(L.claim_global(claims, "k1", B, 2), (False, A["sid"]))
+        L.claim_global(claims, "k2", A, 3, "C:/V/P/task/T02-b")
+        self.assertEqual(L.take_claim(claims, "k1", B, 4), A["sid"])
+        self.assertEqual((claims["k1"]["sid"], claims["k2"]["sid"]), (B["sid"], A["sid"]), "只转这一项")
+        self.assertIsNone(L.take_claim(claims, "k1", B, 5), "自己的不算接手")
+        self.assertEqual(L.tasks_by_sid(claims)[A["sid"]], ["C:/V/P/task/T02-b"])
+        self.assertEqual(L.task_label("C:/V/P/task/T02-b"), "P/task/T02-b")
+        L.prune_claims(claims, lambda pid, ct: None if pid == 100 else False)
+        self.assertEqual(list(claims), ["k2"], "确认死亡才清，确认不了的留着")
+        self.assertEqual(L.release_claims(claims, A["sid"]), ["k2"])
+        self.assertEqual(claims, {})
 
     def test_release_mine(self):
         self.write(A, CHAIN_A, tid="t1")
@@ -216,40 +230,70 @@ class EndToEndTest(unittest.TestCase):
         rc, out = self.run_cli("hook", stdin=json.dumps(data))
         return json.loads(out)["hookSpecificOutput"]["additionalContext"] if out else ""
 
-    def test_task_board_flow(self):
-        self.assertEqual(self.session_start(A, self.main), "", "没有条目也没有别的会话时必须静默")
-        rc, path = self.run_cli("--cwd", str(self.wt2), "new", "t1", "--title", "第一件")
-        self.assertEqual(rc, 0)
-        text = Path(path.strip()).read_text(encoding="utf-8")
-        self.assertIn("wt2", text)
-        self.assertIn("- 状态: 待办", text)
-        rc, out = self.run_cli("--cwd", str(self.main), "status")
-        self.assertIn("t1：第一件", out, "从另一个 worktree 也要看到同一份条目")
-        self.assertIn("当前工作区的条目全文", self.session_start(A, self.wt2))
-        self.assertNotIn("当前工作区的条目全文", self.session_start(A, self.main))
-        self.assertEqual(self.run_cli("--cwd", str(self.wt2), "new", "t1", "--title", "重复")[0], 1)
+    def as_cli(self, s, *argv, cwd=None):
+        self.as_session(s)
+        return self.run_cli("--cwd", str(cwd or self.tmp.name), *argv, env={pstate.SESSION_ENV: s["sid"]})
 
-        self.as_session(A)
-        rc, _ = self.run_cli("--cwd", str(self.main), "claim", "t1", env={pstate.SESSION_ENV: A["sid"]})
-        self.assertEqual(rc, 0)
-        self.assertIn("- 状态: 进行中", Path(path.strip()).read_text(encoding="utf-8"))
-        self.as_session(B)
-        rc, out = self.run_cli("--cwd", str(self.main), "claim", "t1", env={pstate.SESSION_ENV: B["sid"]})
+    def test_task_claim_flow_outside_git(self):
+        t1 = Path(self.tmp.name) / "vault" / "P2601-x" / "task" / "T01-plan"
+        t2 = t1.with_name("T02-more")
+        t1.mkdir(parents=True)
+        t2.mkdir()
+        self.assertEqual(self.session_start(A, self.main), "", "没有别的会话和认领时必须静默")
+        self.assertEqual(self.as_cli(A, "claim", str(t1))[0], 0, "认领不依赖 git 仓")
+        self.assertEqual(self.as_cli(A, "claim", str(t1))[0], 0, "重复认领幂等")
+        rc, out = self.as_cli(B, "claim", str(t1))
         self.assertEqual(rc, 1)
         self.assertIn("aaaa1111", out)
-        self.assertIn("由会话 aaaa1111 认领", self.session_start(B, self.main))
-        rc, out = self.run_cli("--cwd", str(self.main), "take", "t1", env={pstate.SESSION_ENV: B["sid"]})
+        self.assertEqual(self.as_cli(B, "claim", str(t1.parent))[0], 2, "不是 task/Tnn 目录")
+        self.assertEqual(self.as_cli(B, "claim", str(t1 / "missing"))[0], 2)
+        for cwd in (self.main, self.tmp.name):
+            ctx = self.session_start(B, cwd)
+            self.assertIn("P2601-x/task/T01-plan：会话 aaaa1111 认领", ctx, "仓内仓外都要看到别人的认领")
+            self.assertIn("claim <任务目录绝对路径>", ctx)
+        self.assertEqual(self.as_cli(A, "claim", str(t2))[0], 0)
+        rc, out = self.as_cli(B, "take", str(t1))
         self.assertEqual(rc, 0, out)
-        self.assertIn("由会话 bbbb2222 认领", self.session_start(A, self.main))
+        rc, out = self.run_cli("--cwd", str(self.main), "status")
+        self.assertIn("T01-plan：会话 bbbb2222 认领", out)
+        self.assertIn("T02-more：会话 aaaa1111 认领", out, "take 只转那一项")
+        self.assertEqual(self.as_cli(A, "take", str(t2))[0], 1, "自己的认领不用接手")
+        rc, out = self.as_cli(B, "release")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("文件占用没处理", out, "仓外 release 要说清没动文件占用")
+        self.run_cli("hook-end", stdin=json.dumps({"session_id": A["sid"]}))
+        self.assertEqual(self.session_start(B, self.main), "", "会话结束后认领随之清掉")
 
-        self.assertEqual(self.run_cli("--cwd", str(self.main), "done", "t1")[0], 0)
-        self.assertNotIn("t1：", self.session_start(A, self.main))
-
-    def test_new_refused_in_company_repo(self):
-        rc, out = self.run_cli("--cwd", str(self.plain), "new", "x", "--title", "公司活")
+    def test_corrupt_claims_file_is_never_overwritten(self):
+        t1 = Path(self.tmp.name) / "vault" / "P" / "task" / "T01-a"
+        t1.mkdir(parents=True)
+        bad = self.state / "claims" / L.CLAIMS_FILE
+        bad.parent.mkdir(parents=True)
+        bad.write_text("{oops", encoding="utf-8")
+        rc, out = self.as_cli(A, "claim", str(t1))
         self.assertEqual(rc, 1)
-        self.assertIn("--force", out)
-        self.assertEqual(self.run_cli("--cwd", str(self.plain), "new", "x", "--title", "公司活", "--force")[0], 0)
+        self.assertIn("不要删除或清空", out)
+        self.assertEqual(bad.read_text(encoding="utf-8"), "{oops")
+        f = self.main / "a.txt"
+        self.pre(A, f, "t1")
+        deny = self.pre(B, f, "t2")
+        self.assertEqual(deny["permissionDecision"], "deny", "认领表坏了文件锁照拦")
+        self.assertIn("认领的任务 （未知）", deny["permissionDecisionReason"])
+
+    def test_legacy_board_is_read_only(self):
+        rc, sdir = self.run_cli("--cwd", str(self.main), "path")
+        legacy = Path(sdir.strip()) / "tasks" / "old.md"
+        legacy.write_text(pstate.new_task_text("旧活", str(self.wt2), "feat", "进行中"), encoding="utf-8")
+        rc, out = self.run_cli("--cwd", str(self.main), "status")
+        self.assertIn("旧看板条目（1，已停止新增，只待收尾）", out)
+        self.assertEqual(self.session_start(A, self.wt2), "", "旧条目不再注入")
+        for repo in (self.main, self.plain):
+            for extra in ((), ("--force",)):
+                rc, out = self.run_cli("--cwd", str(repo), "new", "x", "--title", "新活", *extra)
+                self.assertEqual(rc, 1)
+                self.assertIn("已停用", out)
+        self.assertEqual(self.run_cli("--cwd", str(self.main), "done", "old")[0], 0)
+        self.assertNotIn("旧看板条目", self.run_cli("--cwd", str(self.main), "status")[1])
 
     def test_cross_worktree_conflict_until_merged(self):
         f_main, f_wt2 = self.main / "a.txt", self.wt2 / "a.txt"
@@ -259,7 +303,8 @@ class EndToEndTest(unittest.TestCase):
         deny = self.pre(B, f_main, "t2")
         self.assertEqual(deny["permissionDecision"], "deny", "不同 worktree 里的同一相对路径也要互斥")
         self.assertIn("aaaa1111", deny["permissionDecisionReason"])
-        self.assertIn("take aaaa1111", deny["permissionDecisionReason"])
+        self.assertIn(f'--cwd "{self.main}" take aaaa1111', deny["permissionDecisionReason"],
+                      "接手命令要指向被写文件所在的仓库")
         ctx = self.session_start(B, self.main)
         self.assertIn("活会话（2）", ctx, "没有条目但有别的活会话也要注入")
         self.assertIn("bbbb2222（本会话）", ctx)

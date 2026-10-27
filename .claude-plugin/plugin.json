@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "project-state",
   "displayName": "project-state 待续回顾与工程协作",
-  "version": "0.4.1",
-  "description": "全局待续回顾：当前会话收录、Claude/Codex 历史正文发现、来源追溯与用户选择；合并 session-sweep 后台判断、联合回顾页和显式迁移切换。事项由用户决定，施工进度继续引用 HANDOFF；Codex 仅交互发现，不提供后台自答或文件锁。",
+  "version": "0.5.0",
+  "description": "全局待续回顾：当前会话收录、Claude/Codex 历史正文发现、来源追溯与用户选择；合并 session-sweep 后台判断、联合回顾页和显式迁移切换。事项只管立项之前，决定做并落进 Obsidian 任务后转交；会话互斥认领 Obsidian 任务目录、按仓库锁文件，旧待办看板停用。施工进度继续引用 HANDOFF；Codex 仅交互发现，不提供后台自答、认领或文件锁。",
   "author": {
     "name": "xu"
   },

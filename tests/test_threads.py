@@ -149,6 +149,46 @@ class StoreTests(unittest.TestCase):
         self.assertNotIn('said', event)
         self.assertFalse(result['confirmed'])
 
+    def test_transfer_needs_verified_do_and_closes_until_reopen(self):
+        item = self.add()
+        ident = item['id']
+        target = {'to': 'C:/vault/P1/task/T01-x', 'evidence': ['写入 方案.md 并回读']}
+        with self.assertRaises(ThreadError):
+            store.mutate(self.directory, 'transfer', target, ident=ident, rev=1)
+        item = store.mutate(self.directory, 'do', decision(), ident=ident, rev=1)['item']
+        with self.assertRaises(ThreadError, msg='do 的原话没核验通过，不能转交'):
+            store.mutate(self.directory, 'transfer', target, ident=ident, rev=item['rev'])
+        verified = {'verified': True, 'reason': 'test'}
+        item = store.mutate(self.directory, 'do', decision(), ident=ident, rev=item['rev'], verified=verified)['item']
+        for bad in ({'to': 'C:/x'}, {'to': 'C:/x', 'evidence': []}, {**target, 'said': 'x'}):
+            with self.assertRaises(ThreadError):
+                store.mutate(self.directory, 'transfer', bad, ident=ident, rev=item['rev'])
+        item = store.mutate(self.directory, 'transfer', target, ident=ident, rev=item['rev'])['item']
+        self.assertEqual((item['state'], item['transferred_to']), ('transferred', target['to']))
+        event = item['log'][-1]
+        self.assertEqual((event['action'], event['actor'], event['to'], event['evidence']),
+                         ('transfer', 'assistant', target['to'], target['evidence']))
+        self.assertEqual(store.counts(store.read(self.directory))['transferred'], 1)
+        self.assertEqual(store.card(item)['transferred_facts'], {'path': target['to'], 'exists': False})
+        for op, value in (('do', decision()), ('later', decision()), ('drop', decision()), ('done', {'evidence': ['x']})):
+            with self.assertRaises(ThreadError, msg=op):
+                store.mutate(self.directory, op, value, ident=ident, rev=item['rev'])
+        with self.assertRaises(ThreadError, msg='transferred_to 只能由 transfer 写'):
+            store.mutate(self.directory, 'set', {'transferred_to': 'C:/y'}, ident=ident, rev=item['rev'])
+        item = store.mutate(self.directory, 'reopen', decision('重新开始'), ident=ident, rev=item['rev'])['item']
+        self.assertEqual(item['state'], 'open')
+        self.assertNotIn('transferred_to', item)
+        self.assertIn('transfer', [e['action'] for e in item['log']], '历史转交目标留在 log')
+
+    def test_transferred_state_must_carry_target(self):
+        item = self.add()
+        path = self.directory / 'threads.json'
+        broken = store.read(self.directory)
+        broken['items'][item['id']]['state'] = 'transferred'
+        path.write_text(json.dumps(broken), encoding='utf-8')
+        with self.assertRaises(ThreadError):
+            store.read(self.directory)
+
     def test_stat_failure_never_treats_database_as_empty(self):
         self.add()
         original = (self.directory / 'threads.json').read_bytes()
@@ -234,6 +274,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(item['state'], 'done')
         self.assertFalse(item['log'][-1]['confirmed'])
         self.assertEqual(len(self.run_cli(['list', '--all', '--json'])['items']), 1)
+
+    def test_transfer_validates_task_directory(self):
+        ident = self.run_cli(['add', '--json'], payload())['item']['id']
+        item = self.run_cli(['choose', ident, 'do', '--rev', '1', '--json'], decision())['item']
+        rev = str(item['rev'])
+        task = Path(self.tmp.name) / 'vault' / 'P2601-x' / 'task' / 'T01-plan'
+        task.mkdir(parents=True)
+        plain = Path(self.tmp.name) / 'vault' / 'notes'
+        plain.mkdir()
+        for to in (str(task / 'missing'), str(plain), 'relative/task/T01-x'):
+            bad = self.run_cli(['transfer', ident, '--rev', rev, '--json'], {'to': to, 'evidence': ['x']}, code=2)
+            self.assertEqual(bad['error']['code'], 'E_VALIDATION')
+        refused = self.run_cli(['transfer', ident, '--rev', rev, '--json'], {'to': str(task), 'evidence': ['x']}, code=1)
+        self.assertIn('verified', refused['error']['message'], '本地找不到原话，do 未核验，不能转交')
+        self.assertEqual(self.run_cli(['show', ident, '--json'])['item']['state'], 'decided')
 
     def test_validation_help_terminator_and_empty_stdout(self):
         bad = self.run_cli(['set', 'missing', '--json'], {}, code=2)

@@ -1,6 +1,7 @@
 # 结构: vibe-scripts/standard（pstate 的锁模块，由 pstate.py 导入；本文件只有 1 配置 / 3 Core / 4 Adapter 三区）
 # 用途: 会话互斥锁——按文件相对路径的显式占用表，占用者挂在 Claude Code 会话进程上，进程没了占用就失效
 # 用法: 不直接运行；pstate.py 的 hook-pre / hook-post / hook-fail / hook-end 钩子与 claim / release / take / lock 子命令调用这里
+#       文件占用按仓库存 locks.json；任务认领按 Obsidian 任务目录存全局 task-claims.json，与 git 仓无关
 # 原始需求: "缺少项目记忆，或者说todo。有时候很容易冲突，和handoff"——几个会话同时干同一个个人项目时，
 #           a 同时改同一批文件（含不同 worktree 里的同一相对路径）、b 同一件事各做一遍；撞上就拦下，由 AI 停下问用户等对方还是接手。
 
@@ -13,6 +14,7 @@ from pathlib import Path
 
 # ===== 1 配置/常量 =====
 LOCK_FILE = "locks.json"
+CLAIMS_FILE = "task-claims.json"
 MUTEX_FILE = "locks.mutex"
 MUTEX_WAIT_SECONDS = 5.0
 GIT_TIMEOUT_SECONDS = 5
@@ -126,12 +128,52 @@ def finish_tool(st, tool_id, failed):
     return None
 
 
-def claim_task(st, slug, me, now):
-    for sid, s in st["sessions"].items():
-        if sid != me["sid"] and s.get("task") == slug:
-            return False, sid
-    upsert_session(st, me, now)["task"] = slug
+def claim_global(claims, key, me, now, path=None):
+    """claims: {认领键: {sid,pid,ctime,transcript,since,path}}。别的会话占着 → (False, 它的会话号)；本会话重复认领幂等。"""
+    held = claims.get(key)
+    if held and held.get("sid") != me["sid"]:
+        return False, held.get("sid")
+    claims[key] = {"sid": me["sid"], "pid": me["pid"], "ctime": me["ctime"],
+                   "transcript": me.get("transcript", ""), "since": (held or {}).get("since", now),
+                   "path": path or (held or {}).get("path") or key}
     return True, me["sid"]
+
+
+def prune_claims(claims, alive):
+    dead = [k for k, c in claims.items() if alive(c.get("pid"), c.get("ctime")) is False]
+    for k in dead:
+        del claims[k]
+    return dead
+
+
+def release_claims(claims, sid):
+    keys = [k for k, c in claims.items() if c.get("sid") == sid]
+    for k in keys:
+        del claims[k]
+    return keys
+
+
+def take_claim(claims, key, me, now):
+    """只转这一项任务认领；返回原认领者会话号，没有可接手的返回 None。"""
+    held = claims.get(key)
+    if not held or held.get("sid") == me["sid"]:
+        return None
+    claims[key] = {"sid": me["sid"], "pid": me["pid"], "ctime": me["ctime"],
+                   "transcript": me.get("transcript", ""), "since": now, "path": held.get("path") or key}
+    return held.get("sid")
+
+
+def tasks_by_sid(claims):
+    out = {}
+    for key, c in claims.items():
+        out.setdefault(c.get("sid"), []).append(c.get("path") or key)
+    return out
+
+
+def task_label(path):
+    """任务目录的短显示：<项目>/task/<Tnn-名称>。"""
+    p = Path(path)
+    return "/".join(p.parts[-3:]) if len(p.parts) >= 3 else str(p)
 
 
 def release_mine(st, sid):
@@ -173,8 +215,9 @@ def take_over(st, target_sid, me, now):
     return {"moved": moved, "inflight": inflight, "task": task}
 
 
-def session_lines(st, me_sid, now, log_age):
-    """log_age(session) → 对话日志距今秒数或 None。"""
+def session_lines(st, me_sid, now, log_age, tasks=None):
+    """log_age(session) → 对话日志距今秒数或 None；tasks: {会话号: [任务目录]}（全局认领快照）。"""
+    tasks = tasks or {}
     lines = []
     counts = {}
     for c in st["claims"].values():
@@ -183,9 +226,13 @@ def session_lines(st, me_sid, now, log_age):
         mark = "（本会话）" if sid == me_sid else ""
         age = log_age(s)
         age_txt = "日志时间未知" if age is None else f"对话日志最后更新 {_age(age)}"
-        lines.append(f"  - 会话 {short(sid)}{mark}：任务 {s.get('task') or '（未认领）'}，"
-                     f"占用 {counts.get(sid, 0)} 个文件，{age_txt}")
+        lines.append(f"  - 会话 {short(sid)}{mark}：任务 {claimed_text(tasks.get(sid))}，"
+                     f"占用本仓 {counts.get(sid, 0)} 个文件，{age_txt}")
     return lines
+
+
+def claimed_text(paths):
+    return "、".join(task_label(p) for p in paths) if paths else "（未认领）"
 
 
 def _age(seconds):
@@ -196,7 +243,8 @@ def _age(seconds):
     return f"{int(seconds // 86400)} 天前"
 
 
-def deny_text(info, st, now, log_age, cmd):
+def deny_text(info, st, now, log_age, cmd, tasks=None):
+    """cmd 已带 --cwd <目标文件所在仓库>；tasks 是全局认领快照，读不到时为 None。"""
     if info["kind"] == "taken":
         return (f"[pstate 锁] 用户已让会话 {short(info.get('by'))} 接手你在这个仓库的活"
                 f"（任务 {info.get('task') or '无'}），你原来占着的文件都转给了它。这次写入已拦下。"
@@ -207,7 +255,7 @@ def deny_text(info, st, now, log_age, cmd):
     parts = [f"[pstate 锁] 这个文件正被另一个会话占用，本次写入已拦下。",
              f"- 文件：{info['rel']}",
              f"- 占用者：会话 {short(info['holder'])}，在 worktree {claim.get('worktree')}，"
-             f"认领的任务 {holder.get('task') or '（未认领）'}，"
+             f"认领的任务 {'（未知）' if tasks is None else claimed_text(tasks.get(info['holder']))}，"
              + ("对话日志时间未知" if age is None else f"对话日志最后更新 {_age(age)}")]
     if claim.get("inflight"):
         parts.append(f"- 它还有 {len(claim['inflight'])} 个对这个文件的写入在执行中或等待批准")
@@ -382,6 +430,52 @@ def save_state(state_dir, st):
     tmp = p.with_name(f"{LOCK_FILE}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(st, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, p)
+
+
+class ClaimsError(RuntimeError):
+    pass
+
+
+def load_claims(home):
+    """全局认领表。文件缺失 = 空；读不了或结构不对就抛 ClaimsError，绝不当空表覆盖。"""
+    p = Path(home) / CLAIMS_FILE
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClaimsError(f"任务认领表读不了：{p}（{e}）") from e
+    if not isinstance(data, dict) or any(not isinstance(v, dict) or not v.get("sid") for v in data.values()):
+        raise ClaimsError(f"任务认领表结构不对：{p}")
+    return data
+
+
+def save_claims(home, claims):
+    p = Path(home) / CLAIMS_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f"{CLAIMS_FILE}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(claims, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def claims_snapshot(home):
+    """只读快照：不加锁、不清理、不写回；读不了返回 None，调用方据此显示“未知”。"""
+    try:
+        return tasks_by_sid(load_claims(home))
+    except ClaimsError:
+        return None
+
+
+def task_dir_key(path):
+    """Obsidian 任务目录 → (认领键, 显示用真实路径)；键是规范大小写的真实路径。
+    不是已存在的 .../task/Tnn-名称 目录就抛 ValueError。"""
+    p = Path(path).expanduser()
+    if not p.is_absolute() or not p.is_dir():
+        raise ValueError(f"任务目录必须是已存在的绝对路径：{path}")
+    real = Path(os.path.realpath(p))
+    if real.parent.name.lower() != "task" or real.name[:1] not in ("T", "t") or not real.name[1:2].isdigit():
+        raise ValueError(f"不是 Obsidian 任务目录（应为 .../task/Tnn-名称）：{real}")
+    return os.path.normcase(str(real)), str(real)
 
 
 def git(args, cwd):

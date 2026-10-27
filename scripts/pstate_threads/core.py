@@ -3,7 +3,9 @@ import copy
 import hashlib
 import json
 
-STATES = ('open', 'decided', 'parked', 'dropped', 'done')
+STATES = ('open', 'decided', 'parked', 'dropped', 'done', 'transferred')
+CLOSED = ('dropped', 'done', 'transferred')
+DECISIONS = ('do', 'later', 'drop', 'done', 'reopen', 'transfer')
 FIELDS = {'title', 'motivation', 'confirmed', 'questions', 'stopped_at', 'next_suggestion', 'paths', 'handoff'}
 
 
@@ -168,7 +170,9 @@ def evolve(state, op, payload, now, ident, rev=None, into=None, distinct=False, 
         return {'id': ident, 'similar': similar}
     item = get_item(state, ident)
     check_rev(item, rev)
-    if op == 'set':
+    if op == 'transfer':
+        event = transfer(item, payload, now)
+    elif op == 'set':
         values = fields(payload)
         annotate_confirmed(values, verification)
         item.update(values)
@@ -184,12 +188,16 @@ def evolve(state, op, payload, now, ident, rev=None, into=None, distinct=False, 
                 raise ThreadError('done requires a nonempty evidence list')
         elif 'evidence' in payload:
             raise ThreadError('evidence is only accepted by done')
-        if op in ('do', 'later', 'drop') and item['state'] in ('dropped', 'done'):
+        if op in ('do', 'later', 'drop') and item['state'] in CLOSED:
             raise ThreadError('closed thread requires explicit reopen first', status=1)
-        if op == 'reopen' and item['state'] not in ('parked', 'dropped', 'done'):
-            raise ThreadError('only parked, dropped or done threads can reopen', status=1)
+        if op == 'done' and item['state'] == 'transferred':
+            raise ThreadError('transferred thread is tracked by its task; reopen before done', status=1)
+        if op == 'reopen' and item['state'] not in ('parked',) + CLOSED:
+            raise ThreadError('only parked, dropped, done or transferred threads can reopen', status=1)
         target = {'do': 'decided', 'later': 'parked', 'drop': 'dropped', 'done': 'done', 'reopen': 'open'}[op]
         item['state'] = target
+        if op == 'reopen':
+            item.pop('transferred_to', None)
         event = {'at': now, 'action': op, 'actor': 'user' if src else 'assistant',
                  'confirmed': bool(src) and verification.get('verified') is True, 'verification': verification}
         if src:
@@ -200,6 +208,25 @@ def evolve(state, op, payload, now, ident, rev=None, into=None, distinct=False, 
     item['rev'] += 1
     item['log'].append(event)
     return {'id': ident, **({'confirmed': event['confirmed'], 'verification': verification} if 'confirmed' in event else {})}
+
+
+def last_decision(item):
+    return next((e for e in reversed(item['log']) if e.get('action') in DECISIONS), None)
+
+
+def transfer(item, payload, now):
+    if set(payload) != {'to', 'evidence'}:
+        raise ThreadError('transfer requires to and evidence only')
+    target = required_text(payload['to'], 'to')
+    evidence = payload['evidence']
+    if not isinstance(evidence, list) or not evidence or any(not isinstance(e, str) or not e.strip() for e in evidence):
+        raise ThreadError('transfer requires a nonempty evidence list')
+    decision = last_decision(item)
+    if item['state'] != 'decided' or not decision or decision.get('action') != 'do' or decision.get('confirmed') is not True:
+        raise ThreadError('transfer requires a decided thread whose do decision was verified', status=1)
+    item['state'] = 'transferred'
+    item['transferred_to'] = target
+    return {'at': now, 'action': 'transfer', 'actor': 'assistant', 'to': target, 'evidence': evidence}
 
 
 def validate_state(state):
@@ -224,7 +251,11 @@ def validate_state(state):
         if any(not isinstance(pair, list) or len(pair) != 2 or any(not isinstance(v, str) for v in pair) for pair in identity['sources']):
             fail()
         optional = {key: val for key, val in item.items() if key in FIELDS and key not in ('title', 'confirmed', 'next_suggestion')}
-        if set(item) - (FIELDS | {'id', 'rev', 'state', 'sources', 'log', 'capture_identity'}):
+        if set(item) - (FIELDS | {'id', 'rev', 'state', 'sources', 'log', 'capture_identity', 'transferred_to'}):
+            fail()
+        if (item['state'] == 'transferred') != ('transferred_to' in item):
+            fail()
+        if 'transferred_to' in item and (not isinstance(item['transferred_to'], str) or not item['transferred_to'].strip()):
             fail()
         try:
             fields(optional)

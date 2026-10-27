@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pstate_lock
-from .core import ThreadError, evolve, get_item, validate_state
+from .core import STATES, ThreadError, evolve, get_item, validate_state
 
 
 def path_exists(path):
@@ -115,12 +115,14 @@ def card(item):
         except OSError as exc:
             fact['error'] = str(exc)
         result['handoff_facts'].append(fact)
+    if 'transferred_to' in item:
+        result['transferred_facts'] = {'path': item['transferred_to'], 'exists': Path(item['transferred_to']).is_dir()}
     return result
 
 
 def counts(state):
     return {name: sum(item['state'] == name for item in state['items'].values())
-            for name in ('open', 'decided', 'parked', 'dropped', 'done')}
+            for name in STATES}
 
 
 def hook_hint(home, cmd):

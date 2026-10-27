@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -17,7 +18,8 @@ HELP = {
         'set': 'set ID --rev N; structured editable fields only, cannot set state',
         'choose': 'choose ID continue|do|later|drop; continue read-only; others require --rev N, said/source JSON',
         'done': 'done ID --rev N; evidence (nonempty string list); optional said/source, otherwise actor=assistant',
-        'reopen': 'reopen ID --rev N; said/source; explicit reopening of parked/dropped/done',
+        'reopen': 'reopen ID --rev N; said/source; explicit reopening of parked/dropped/done/transferred (clears transferred_to)',
+        'transfer': 'transfer ID --rev N; JSON to (existing task directory .../task/Tnn-name) + evidence list; only from decided set by a verified do; closes the thread',
         'discover': 'optional JSON roots/cursor/limit/max_chars/since/exclude_sessions/sweep_state; read-only, not auto-seen',
         'seen': 'JSON platform/session/version; explicit review acknowledgement'},
     'source': {'required': ['platform', 'session', 'anchor', 'time', 'role', 'excerpt', 'excerpt_hash'],
@@ -25,7 +27,8 @@ HELP = {
     'decisions': 'said is a verbatim user quotation contained in source.excerpt. Verification checks origin, never intent. Unverified origins return confirmed=false.',
     'options': ['--json', '--format json', '--dry-run (mutations)', '--ai-help'],
     'exits': {'0': 'success', '1': 'operational error/conflict', '2': 'invalid usage'},
-    'safety': 'No task/file creation by do. New sources never reopen a closed item. No extra model calls.'}
+    'safety': 'No task/file creation by do or transfer. New sources never reopen a closed item. No extra model calls.'}
+TASK_DIR = re.compile(r'^T\d+')
 
 
 def ai_help():
@@ -63,6 +66,7 @@ All those mutations support --dry-run through the same transaction path; only a 
 list/show/choose continue read state; show/continue inspect HANDOFF metadata without executing or changing its contents.
 discover reads requested local history and optional session-sweep state; it does not call a model, write history or automatically mark seen.
 No command here creates an execution task, edits a project or uses the network. do records a decision only.
+transfer closes a decided thread after its goal, conclusions and open questions were written into an existing task directory; it verifies only that the directory exists and is named .../task/Tnn-name.
 Source verification checks the message origin, not semantic authorization; failed verification remains explicit confirmed=false.
 Historical sources never reopen parked/dropped/done items. Reopening needs an explicit user quotation.
 
@@ -101,15 +105,15 @@ def parser():
     for name in HELP['commands']:
         command = sub.add_parser(name)
         common(command)
-        if name in ('show', 'set', 'choose', 'done', 'reopen'):
+        if name in ('show', 'set', 'choose', 'done', 'reopen', 'transfer'):
             command.add_argument('id')
         if name == 'choose':
             command.add_argument('choice', choices=('continue', 'do', 'later', 'drop'))
-        if name in ('add', 'set', 'choose', 'done', 'reopen', 'seen'):
+        if name in ('add', 'set', 'choose', 'done', 'reopen', 'seen', 'transfer'):
             command.add_argument('--dry-run', action='store_true')
-        if name in ('add', 'set', 'choose', 'done', 'reopen'):
-            command.add_argument('--rev', type=int, required=name in ('set', 'done', 'reopen'))
-        if name in ('add', 'set', 'choose', 'done', 'reopen', 'seen', 'discover'):
+        if name in ('add', 'set', 'choose', 'done', 'reopen', 'transfer'):
+            command.add_argument('--rev', type=int, required=name in ('set', 'done', 'reopen', 'transfer'))
+        if name in ('add', 'set', 'choose', 'done', 'reopen', 'seen', 'discover', 'transfer'):
             input_option(command)
         if name == 'add':
             group = command.add_mutually_exclusive_group()
@@ -185,6 +189,9 @@ def dispatch(args, directory):
         payload['seen'] = store.read(directory)['seen']
         return history().discover(payload)
     op = args.choice if command == 'choose' else command
+    if op == 'transfer':
+        payload = dict(payload)
+        payload['to'] = task_dir(payload.get('to'))
     needs_statement = op in ('do', 'later', 'drop', 'reopen') or (op == 'done' and ('said' in payload or 'source' in payload))
     verification = verify(payload) if needs_statement else None
     if op in ('add', 'set') and 'confirmed' in payload:
@@ -193,6 +200,18 @@ def dispatch(args, directory):
     return store.mutate(directory, op, payload, ident=getattr(args, 'id', None), rev=getattr(args, 'rev', None),
                         into=getattr(args, 'into', None), distinct=getattr(args, 'distinct', False),
                         verified=verification, dry_run=args.dry_run)
+
+
+def task_dir(value):
+    if not isinstance(value, str) or not value.strip():
+        raise ThreadError('to must be a task directory path')
+    path = Path(value).expanduser()
+    if not path.is_absolute() or not path.is_dir():
+        raise ThreadError('to must be an existing absolute directory: ' + value)
+    path = Path(os.path.realpath(path))
+    if path.parent.name.lower() != 'task' or not TASK_DIR.match(path.name):
+        raise ThreadError('to must be a task directory named .../task/Tnn-name: ' + str(path))
+    return str(path)
 
 
 def envelope(data=None, error=None):

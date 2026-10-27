@@ -1,7 +1,7 @@
 # 结构: vibe-scripts/standard（锁的 Core/Adapter 拆在同目录 pstate_lock.py）
-# 用途: 项目看板——同一仓库的所有 worktree、所有 AI 会话共用：会话互斥锁（谁在干哪件事、占着哪些文件）＋ 待办条目
-# 用法: py -3 pstate.py status | new <slug> --title <标题> | claim <slug> | release | take <会话号|slug> | lock on|off|auto
-#       | done <slug> | path | hook / hook-pre / hook-post / hook-fail / hook-end（Claude Code 钩子，读 stdin）
+# 用途: 会话互斥——同一仓库所有 worktree 共用的文件占用锁 ＋ 全局的 Obsidian 任务认领（谁在干哪件事）；旧待办看板只读兼容
+# 用法: py -3 pstate.py status | claim <任务目录> | release | take <会话号|任务目录> | lock on|off|auto
+#       | done <旧条目短名> | path | hook / hook-pre / hook-post / hook-fail / hook-end（Claude Code 钩子，读 stdin）
 # 原始需求: "缺少项目记忆，或者说todo。有时候很容易冲突，和handoff"。几个会话同时干同一个个人项目时互斥：
 #           同时改同一批文件、同一件事做两遍，撞上就拦下由 AI 问用户；外加待办看板。进度正文写项目的 HANDOFF，不写这里。
 #           只管个人项目（公司仓不加锁、不新建条目）；状态放仓库外本机目录（按 git common dir 识别同一仓库）。
@@ -147,7 +147,8 @@ def task_line(slug, task, mtime, now, known_wts, current_wt, holder=""):
     return line + (f"\n      下一步：{nxt}" if nxt else "")
 
 
-def render_status(repo_name, state_dir, worktrees, tasks, current_wt, now, session_lines=(), holders=None):
+def render_status(repo_name, state_dir, worktrees, tasks, current_wt, now, session_lines=(), holders=None,
+                  claim_lines=()):
     """worktrees: [{path, branch, head, prunable, changes:(t,u)|None}]；tasks: [(slug, task, mtime)]。"""
     holders = holders or {}
     lines = [f"[pstate] {repo_name} 的工作现场（任务目录 {state_dir}）", "工作区："]
@@ -162,43 +163,35 @@ def render_status(repo_name, state_dir, worktrees, tasks, current_wt, now, sessi
     if session_lines:
         lines.append(f"活会话（{len(session_lines)}）：")
         lines += list(session_lines)
+    if claim_lines:
+        lines.append(f"任务认领（全局，{len(claim_lines)}）：")
+        lines += list(claim_lines)
     known = {norm(w["path"]) for w in worktrees if not w["prunable"]}
     if tasks:
-        lines.append(f"看板条目（{len(tasks)}）：")
+        lines.append(f"旧看板条目（{len(tasks)}，已停止新增，只待收尾）：")
         lines += [task_line(s, t, m, now, known, current_wt, holders.get(s, "")) for s, t, m in tasks]
-    else:
-        lines.append("看板条目：无")
     return "\n".join(lines)
 
 
-def render_hook(status_text, current_tasks, cmd, personal):
-    """current_tasks: [(path, text)]，当前 worktree 的条目全文。"""
-    lines = [status_text, ""]
-    total = sum(len(t) for _, t in current_tasks)
-    if current_tasks and total <= MAX_INJECT:
-        lines.append("当前工作区的条目全文：")
-        for path, text in current_tasks:
-            lines += ["", f"--- {path} ---", text.rstrip()]
-        lines.append("")
-    elif current_tasks:
-        lines.append(f"当前工作区的条目合计 {total} 字，没有注入全文，接手前完整读完：")
-        lines += [f"- {p}" for p, _ in current_tasks]
-        lines.append("")
-    if personal:
-        lines += [
-            "这是本仓库的 pstate 看板：会话互斥（哪个会话在干哪件事、占着哪些文件）＋ 待办条目。用法：",
-            f"- 开工前对一下上面的活会话和条目。要做的事在看板上，先 {cmd} claim <短名>；被拒说明别的活会话正在干，停下问用户等对方还是接手。",
-            f"- 看板上没有、又会跨会话的事，{cmd} new <英文短名> --title <标题> 建一条再 claim；一问一答当场做完的不建。",
-            "- 改文件时钩子自动占用；撞上别的活会话占着的文件会被拦下，照拦截提示问用户，别换工具绕过。",
-            "- 进度和交接写项目的 HANDOFF.md，不写进看板条目，也不写进记忆；条目只放标题、状态、一句目标。",
-            f"- 做完：{cmd} done <短名>。用 squash / cherry-pick 合并、或放弃改动的，收尾跑 {cmd} release 放掉占用。",
-        ]
-    else:
-        lines += [
-            "这是本仓库遗留的 pstate 任务（公司仓：用户定了不加锁、不新建任务，这里只保留已有任务直到做完）。",
-            f"- 用户要做的事对应上面某个任务，就接着干，先读它全文；有实质进展时更新该任务 .md；做完 {cmd} done <短名>。",
-            "- 进度不写进记忆；记忆只放长期有效的结论和教训。",
-        ]
+def render_claims(claims, me_sid, now, log_age):
+    """claims: 全局认领表（已滤掉确认死亡的会话）→ 每项一行。"""
+    lines = []
+    for c in sorted(claims.values(), key=lambda c: c.get("since", 0)):
+        mark = "（本会话）" if c.get("sid") == me_sid else ""
+        age = log_age(c)
+        age_txt = "日志时间未知" if age is None else f"对话日志最后更新 {age_text(age)}"
+        lines.append(f"  - {L.task_label(c.get('path') or '')}：会话 {L.short(c.get('sid'))}{mark} 认领，{age_txt}")
+    return lines
+
+
+def render_hook(status_text, cmd):
+    lines = [status_text, "",
+             "这是 pstate 会话互斥：上面列出别的会话正在干的任务和占着的文件。用法：",
+             f"- 要动手的事对应 Obsidian 任务目录（…/task/Tnn-名称）时，改它的文档或代码之前先 {cmd} claim <任务目录绝对路径>；"
+             f"被拒说明别的活会话正在干，停下问用户等对方还是接手（接手这一项：{cmd} take <任务目录>）。",
+             "- 改文件时钩子自动占用；撞上别的活会话占着的文件会被拦下，照拦截提示问用户，别换工具绕过。",
+             "- 进度和交接写项目 HANDOFF.md；旧看板已停用，不新建条目。",
+             f"- 用 squash / cherry-pick 合并、或放弃改动的，收尾跑 {cmd} --cwd <仓库> release 放掉认领和该仓文件占用。"]
     return "\n".join(lines)
 
 
@@ -238,6 +231,21 @@ def collect_worktrees(cwd):
 
 def state_home():
     return Path(os.environ.get(STATE_HOME_ENV) or STATE_HOME_DEFAULT)
+
+
+def claims_home():
+    return state_home() / "claims"
+
+
+def global_claims(backend):
+    """只读：全局认领表滤掉确认死亡的会话；不加锁、不写回。读不了返回 None。"""
+    try:
+        claims = L.load_claims(claims_home())
+    except L.ClaimsError:
+        return None
+    if backend:
+        claims = {k: c for k, c in claims.items() if backend.alive(c.get("pid"), c.get("ctime")) is not False}
+    return claims
 
 
 def state_dir_for(common_dir):
@@ -301,13 +309,16 @@ def build_status(cwd, me_sid=""):
     sdir = state_dir_for(common)
     raw = load_tasks(sdir) if (sdir / "tasks").is_dir() else []
     parsed = [(s, parse_task(t), m) for s, _, t, m in raw]
-    st = live_state(sdir, L.process_backend())
+    backend = L.process_backend()
+    st = live_state(sdir, backend)
+    claims = global_claims(backend)
     now = time.time()
     holders = {s.get("task"): L.short(sid) for sid, s in st["sessions"].items() if s.get("task")}
     text = render_status(Path(common).parent.name if Path(common).name == ".git" else Path(common).name,
                          sdir, collect_worktrees(cwd), parsed, top, now,
-                         L.session_lines(st, me_sid, now, L.log_age), holders)
-    return text, raw, parsed, top, sdir, st
+                         L.session_lines(st, me_sid, now, L.log_age, L.tasks_by_sid(claims or {})), holders,
+                         render_claims(claims or {}, me_sid, now, L.log_age))
+    return text, raw, parsed, top, sdir, st, claims
 
 
 def cmd_status(args):
@@ -317,66 +328,86 @@ def cmd_status(args):
 
 
 def cmd_new(args):
-    if not SLUG_RE.match(args.slug):
-        print(f"短名只能用字母、数字、下划线、点、横线：{args.slug}", file=sys.stderr)
-        return 2
-    common, top, branch = repo_context(args.cwd)
-    if not args.force and not personal_repo(top, state_dir_for(common)):
-        print("这不是个人项目（没有 docs/BLUEPRINT.md，也没用 lock on 打开）：用户定了公司仓不新建条目。"
-              "确实要建，加 --force。", file=sys.stderr)
-        return 1
-    p = ensure_state_dir(common) / "tasks" / f"{args.slug}.md"
-    if p.exists():
-        print(f"条目已存在：{p}", file=sys.stderr)
-        return 1
-    handoff = Path(top) / "docs" / "HANDOFF.md"
-    p.write_text(new_task_text(args.title, top, branch, args.status, f"{handoff}（进度正文写那里）"),
-                 encoding="utf-8")
-    print(p)
-    return 0
+    print("旧看板已停用，不再新建条目（--force 也不行）。要跟踪的活去 Obsidian 建或复用任务目录（…/task/Tnn-名称），"
+          "开工时 claim <任务目录>；进度写项目 HANDOFF.md。", file=sys.stderr)
+    return 1
 
 
 def cmd_claim(args):
-    common, _, _ = repo_context(args.cwd)
-    sdir = state_dir_for(common)
-    task_file = sdir / "tasks" / f"{args.slug}.md"
-    if not task_file.exists():
-        print(f"看板上没有这一条：{args.slug}。先 new 再 claim。", file=sys.stderr)
-        return 1
+    try:
+        key, real = L.task_dir_key(args.task)
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 2
     backend = L.process_backend()
     me, _ = me_from_env(backend)
-    with L.mutex(sdir):
-        st = L.load_state(sdir)
-        L.prune(st, backend.alive)
-        ok, holder = L.claim_task(st, args.slug, me, time.time())
-        L.save_state(sdir, st)
+    home = claims_home()
+    with L.mutex(home):
+        claims = L.load_claims(home)
+        L.prune_claims(claims, backend.alive)
+        ok, holder = L.claim_global(claims, key, me, time.time(), real)
+        L.save_claims(home, claims)
     if not ok:
-        print(f"「{args.slug}」已被活会话 {L.short(holder)} 认领。停下，告诉用户这件事别的会话正在干，"
-              f"问他等对方还是接手；用户说接手再跑：take {L.short(holder)}", file=sys.stderr)
+        print(f"任务「{L.task_label(real)}」已被活会话 {L.short(holder)} 认领。停下，告诉用户这件事别的会话正在干，"
+              f"问他等对方还是接手；用户说接手再跑：take \"{real}\"", file=sys.stderr)
         return 1
-    text = task_file.read_text(encoding="utf-8", errors="replace")
-    task_file.write_text(set_field(text, FIELD_STATUS, "进行中"), encoding="utf-8")
-    print(f"已认领 {args.slug}（会话 {L.short(me['sid'])}）")
+    print(f"已认领 {L.task_label(real)}（会话 {L.short(me['sid'])}）")
     return 0
 
 
 def cmd_release(args):
-    common, _, _ = repo_context(args.cwd)
-    sdir = state_dir_for(common)
     me, _ = me_from_env(L.process_backend())
+    home = claims_home()
+    with L.mutex(home):
+        claims = L.load_claims(home)
+        keys = L.release_claims(claims, me["sid"])
+        L.save_claims(home, claims)
+    print(f"已放掉本会话全部 {len(keys)} 项任务认领")
+    try:
+        common, top, _ = repo_context(args.cwd)
+    except RuntimeError:
+        print("当前目录不在 git 仓库里，文件占用没处理；要放某个仓库的占用：--cwd <仓库> release")
+        return 0
+    sdir = state_dir_for(common)
     with L.mutex(sdir):
         st = L.load_state(sdir)
         n = L.release_mine(st, me["sid"])
         L.save_state(sdir, st)
-    print(f"已放掉任务认领和 {n} 个文件占用")
+    print(f"已放掉 {top} 所在仓库的 {n} 个文件占用")
+    return 0
+
+
+def looks_like_path(text):
+    return os.path.isabs(text) or "/" in text or "\\" in text
+
+
+def take_task(target, me, backend):
+    try:
+        key, real = L.task_dir_key(target)
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 2
+    home = claims_home()
+    with L.mutex(home):
+        claims = L.load_claims(home)
+        L.prune_claims(claims, backend.alive)
+        prev = L.take_claim(claims, key, me, time.time())
+        L.save_claims(home, claims)
+    if prev is None:
+        print(f"没有别的活会话认领着 {L.task_label(real)}（可能已经结束），直接 claim 即可", file=sys.stderr)
+        return 1
+    print(f"已接手任务 {L.task_label(real)}（原认领会话 {L.short(prev)}）。只转了这一项认领，"
+          "对方在各仓库的文件占用没动；写文件被拦时按拦截提示里的 --cwd <仓库> take <会话号> 处理")
     return 0
 
 
 def cmd_take(args):
-    common, _, _ = repo_context(args.cwd)
-    sdir = state_dir_for(common)
     backend = L.process_backend()
     me, _ = me_from_env(backend)
+    if looks_like_path(args.target):
+        return take_task(args.target, me, backend)
+    common, _, _ = repo_context(args.cwd)
+    sdir = state_dir_for(common)
     with L.mutex(sdir):
         st = L.load_state(sdir)
         L.prune(st, backend.alive)
@@ -386,7 +417,7 @@ def cmd_take(args):
             return 1
         info = L.take_over(st, target, me, time.time())
         L.save_state(sdir, st)
-    print(f"已接手会话 {L.short(target)}：{info['moved']} 个文件占用，任务 {info['task'] or '无'}")
+    print(f"已接手会话 {L.short(target)} 在本仓的 {info['moved']} 个文件占用（它的任务认领没动，要接手用 take <任务目录>）")
     if info["inflight"]:
         print(f"注意：对方还有 {info['inflight']} 个写入在执行中或等待批准，已经放行的写入撤不回，先看一眼对方窗口。")
     return 0
@@ -446,30 +477,32 @@ def global_thread_hint():
         return ""
 
 
+def hook_context(cwd, me_sid):
+    """有别的活会话（本仓）或别的会话的任务认领（全局）才返回注入文本，否则空。"""
+    if os.path.isdir(cwd):
+        try:
+            text, _, _, _, _, st, claims = build_status(cwd, me_sid)
+        except RuntimeError:
+            text = None
+        else:
+            others = [sid for sid in st["sessions"] if sid != me_sid]
+            if others or any(c.get("sid") != me_sid for c in (claims or {}).values()):
+                return render_hook(text, self_cmd())
+            return ""
+    claims = global_claims(L.process_backend()) or {}
+    if not any(c.get("sid") != me_sid for c in claims.values()):
+        return ""
+    lines = [f"[pstate] 任务认领（全局，{len(claims)}）："] + render_claims(claims, me_sid, time.time(), L.log_age)
+    return render_hook("\n".join(lines), self_cmd())
+
+
 def cmd_hook(args):
     data = read_hook_input()
     cwd = data.get("cwd") or os.getcwd()
-    hint = global_thread_hint()
     event = data.get("hook_event_name") or "SessionStart"
-    if not os.path.isdir(cwd):
-        if hint:
-            emit(event, additionalContext=hint)
-        return 0
-    try:
-        text, raw, parsed, top, sdir, st = build_status(cwd, data.get("session_id", ""))
-    except RuntimeError:
-        if hint:
-            emit(event, additionalContext=hint)
-        return 0
-    others = [sid for sid in st["sessions"] if sid != data.get("session_id")]
-    if not raw and not others:
-        if hint:
-            emit(event, additionalContext=hint)
-        return 0
-    current = [(p, t) for (_, p, t, _), (_, task, _) in zip(raw, parsed)
-               if norm(task["fields"].get(FIELD_WORKTREE, "")) == norm(top)]
-    ctx = render_hook(text, current, self_cmd(), personal_repo(top, sdir))
-    emit(event, additionalContext="\n".join(part for part in (ctx, hint) if part))
+    parts = [p for p in (hook_context(cwd, data.get("session_id", "")), global_thread_hint()) if p]
+    if parts:
+        emit(event, additionalContext="\n".join(parts))
     return 0
 
 
@@ -503,7 +536,8 @@ def cmd_hook_pre(args):
         L.save_state(sdir, st)
     if decision == "deny":
         emit("PreToolUse", permissionDecision="deny",
-             permissionDecisionReason=L.deny_text(info, st, now, L.log_age, self_cmd()))
+             permissionDecisionReason=L.deny_text(info, st, now, L.log_age, f'{self_cmd()} --cwd "{top}"',
+                                                  L.claims_snapshot(claims_home())))
     elif info["kind"] == "claimed":
         marker = inflight_marker(tool_id)
         marker.parent.mkdir(parents=True, exist_ok=True)
@@ -548,6 +582,15 @@ def cmd_hook_end(args):
             st = L.load_state(sdir)
             L.drop_session(st, sid)
             L.save_state(sdir, st)
+    try:
+        home = claims_home()
+        if (home / L.CLAIMS_FILE).exists():
+            with L.mutex(home):
+                claims = L.load_claims(home)
+                if L.release_claims(claims, sid):
+                    L.save_claims(home, claims)
+    except (L.ClaimsError, OSError):
+        pass
     for marker in (state_home() / "inflight").glob("*"):
         try:
             if marker.read_text(encoding="utf-8").splitlines()[1:2] == [sid]:
@@ -563,26 +606,26 @@ COMMANDS = {"status": cmd_status, "new": cmd_new, "claim": cmd_claim, "release":
 
 
 def build_parser():
-    ap = argparse.ArgumentParser(prog="pstate", description="项目看板：会话互斥锁 + 待办条目",
+    ap = argparse.ArgumentParser(prog="pstate", description="会话互斥：文件占用锁 + Obsidian 任务认领",
                                  epilog="LLMs/agents: run 'pstate --ai-help' for usage guidance.")
     ap.add_argument("--cwd", default=os.getcwd(), help="从哪个目录识别仓库（默认当前目录）")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("thread", help="全局待续事项；thread --ai-help 查看结构化契约")
     sub.add_parser("sweep", help="内部后台与联合回顾页；sweep --ai-help 查看契约")
-    sub.add_parser("status", help="工作区现场 + 活会话 + 看板条目")
-    p = sub.add_parser("new", help="新建看板条目，打印路径（公司仓默认拒绝）")
+    sub.add_parser("status", help="工作区现场 + 活会话 + 全局任务认领（+ 待收尾的旧看板条目）")
+    p = sub.add_parser("new", help="（已停用）旧看板新建条目，现在一律拒绝")
     p.add_argument("slug")
     p.add_argument("--title", required=True)
     p.add_argument("--status", choices=STATUSES, default="待办")
     p.add_argument("--force", action="store_true", help="不是个人项目也建")
-    p = sub.add_parser("claim", help="本会话认领一条；已被别的活会话认领则退出 1")
-    p.add_argument("slug")
-    sub.add_parser("release", help="放掉本会话在本仓库的认领和文件占用")
-    p = sub.add_parser("take", help="用户同意后接手另一个会话的占用和认领")
-    p.add_argument("target", help="会话号前缀或条目短名")
+    p = sub.add_parser("claim", help="本会话认领一个 Obsidian 任务目录；已被别的活会话认领则退出 1")
+    p.add_argument("task", help="任务目录绝对路径（…/task/Tnn-名称）")
+    sub.add_parser("release", help="放掉本会话全部任务认领，以及 --cwd 所在仓库的文件占用")
+    p = sub.add_parser("take", help="用户同意后接手：任务目录 → 只转这一项认领；会话号 → 转 --cwd 所在仓库的文件占用")
+    p.add_argument("target", help="任务目录绝对路径，或会话号前缀")
     p = sub.add_parser("lock", help="本仓库的锁开关：on 强制开 / off 关 / auto 按蓝图判断")
     p.add_argument("mode", choices=("on", "off", "auto"))
-    p = sub.add_parser("done", help="条目移出活跃视图（移到 done/）")
+    p = sub.add_parser("done", help="旧看板条目收尾：移出活跃视图（移到 done/）")
     p.add_argument("slug")
     sub.add_parser("path", help="打印本仓库的任务目录")
     for name, desc in (("hook", "SessionStart 钩子"), ("hook-pre", "PreToolUse 钩子：写入前裁决"),
@@ -608,6 +651,11 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         return COMMANDS[args.cmd](args)
+    except L.ClaimsError as e:
+        if args.cmd in HOOK_COMMANDS:
+            return 0
+        print(f"{e}。先人工检查这个文件，不要删除或清空。", file=sys.stderr)
+        return 1
     except RuntimeError as e:
         if args.cmd in HOOK_COMMANDS:
             return 0
