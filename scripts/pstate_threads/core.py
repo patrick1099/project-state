@@ -22,16 +22,24 @@ def required_text(value, name):
 
 
 def source_key(source):
-    return json.dumps([source['platform'], source['session'], source['anchor']], ensure_ascii=False)
+    parts = [source['platform'], source['session'], source['anchor']]
+    if source.get('host') or source.get('agentId'):
+        parts += [source.get('host', ''), source.get('agentId', '')]
+    return json.dumps(parts, ensure_ascii=False)
 
 
 def source(value):
     if not isinstance(value, dict):
         raise ThreadError('source must be an object')
     needed = {'platform', 'session', 'anchor', 'time', 'role', 'excerpt', 'excerpt_hash'}
-    if set(value) - (needed | {'path'}) or not needed <= set(value):
-        raise ThreadError('source requires platform/session/anchor/time/role/excerpt/excerpt_hash; optional path')
-    out = {key: required_text(val, 'source.' + key) for key, val in value.items()}
+    if set(value) - (needed | {'path', 'host', 'agentId', 'start_dir'}) or not needed <= set(value):
+        raise ThreadError('source requires platform/session/anchor/time/role/excerpt/excerpt_hash; optional path/host/agentId/start_dir')
+    out = {}
+    for key, val in value.items():
+        if key in ('agentId', 'start_dir') and val == '':
+            out[key] = val
+        else:
+            out[key] = required_text(val, 'source.' + key)
     if out['role'] not in ('user', 'assistant'):
         raise ThreadError('source role must be user or assistant')
     digest = hashlib.sha256(out['excerpt'].encode('utf-8')).hexdigest()
@@ -172,6 +180,8 @@ def evolve(state, op, payload, now, ident, rev=None, into=None, distinct=False, 
     check_rev(item, rev)
     if op == 'transfer':
         event = transfer(item, payload, now)
+        if event is None:
+            return {'id': ident, 'replayed': True}
     elif op == 'set':
         values = fields(payload)
         annotate_confirmed(values, verification)
@@ -221,6 +231,10 @@ def transfer(item, payload, now):
     evidence = payload['evidence']
     if not isinstance(evidence, list) or not evidence or any(not isinstance(e, str) or not e.strip() for e in evidence):
         raise ThreadError('transfer requires a nonempty evidence list')
+    if item['state'] == 'transferred':
+        if item['transferred_to'] != target:
+            raise ThreadError('thread already transferred to a different task', status=1)
+        return None
     decision = last_decision(item)
     if item['state'] != 'decided' or not decision or decision.get('action') != 'do' or decision.get('confirmed') is not True:
         raise ThreadError('transfer requires a decided thread whose do decision was verified', status=1)

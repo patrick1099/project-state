@@ -48,7 +48,7 @@ def enumerate_paths(roots, warnings, counts):
             subdirs[:] = sorted(s for s in subdirs if s != "subagents" and not Path(directory, s).is_symlink())
             for name in sorted(names):
                 path = Path(directory, name)
-                if name.endswith(".jsonl") and not path.is_symlink():
+                if name.endswith((".jsonl", ".jsonl.zst")) and not path.is_symlink():
                     paths.add(path.resolve())
     return sorted(paths, key=str)
 

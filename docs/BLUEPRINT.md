@@ -27,6 +27,7 @@
 - 看现场（status）：在仓库内任意目录运行 → 打印仓库名与状态目录；列出 git 登记的每个 worktree（路径、分支、HEAD 短哈希、"干净"或"改动 N，未跟踪 M"，目录不存在或读不了就明说），当前所在的那个带 `*`；有活会话时列出每个活会话：会话号（本会话标"（本会话）"）、它认领的任务、占用本仓几个文件、对话日志最后更新时间；有任务认领时列出每项（任务短显示 `<项目>/task/<Tnn-名称>`、哪个会话、日志时间），只认领还没写文件的会话也列出。已经死掉的会话在读现场时顺手清掉文件占用（认领只滤掉不显示）。
 - 旧看板（只读兼容）：`new` 一律拒绝并退出 1（含 `--force`），提示去 Obsidian 建任务再 claim。已存在的旧条目在 status 里列为“旧看板条目（已停止新增，只待收尾）”，照旧显示状态、7 天未改标"久未更新"、工作区不在 git 登记里标出；`done <短名>` 把条目移到 `done/<YYYYMMDD>-<短名>.md`。旧条目不再注入。
 - 状态目录（path）：打印本仓库的状态目录（不存在就建）。
+- claim / take 成功后自动把本会话登记进该任务的 `会话.md`（见 2.9，依据分别为 claim / take）。认领成功但登记失败：认领结果照报，另报登记失败并给出可直接执行的 `link` 补记命令，退出 1。release 与会话结束不删任何登记。
 - `claim` / `take` / `release` 只能在 Claude Code 会话里运行（靠会话号环境变量认出自己），认不出退出 1。仓库相关命令默认按当前目录识别仓库，`--cwd <目录>` 可指定；从哪个 worktree、哪个子目录进来，看到的都是同一份。
 - 认领表损坏或读不了：claim/take/release 退出 1 并要求人工检查，绝不当空表覆盖；文件锁照常裁决。
 
@@ -53,15 +54,16 @@
 - 归并与幂等：重复收录相同标题及来源可返回已有 ID；同锚点拆成不同事项须明确 --distinct，追加到已有事项用 --into ID --rev N，且仅追加来源。改摘要走 set。新来源不能重开 parked/dropped/done/transferred；同名仅提供相似提示，不自动合并。
 - 四个选择：continue 只返回卡片，状态和版本不变；do → decided，仅记录决定，不创建任务或执行工作；later → parked，默认隐藏但 list --all/--state parked 可找回；drop → dropped，保留决定记录。do/later/drop 需要用户原话及来源。
 - 转交（transfer ID --rev N，输入 {to, evidence}）：只允许 decided → transferred，且让它进入 decided 的那次 do 原话已核验（confirmed=true），否则退出 1；to 必须是已存在的绝对路径任务目录 `…/task/Tnn-名称`（不符退出 2，CLI 只核这一点，内容是否交接由 evidence 如实写），保存为规范化真实路径；evidence 为非空字符串数组。记录 transferred_to 字段，log 留 to、evidence、时间、actor=assistant。transferred_to 只能由 transfer 写，add/set 不能改。transferred 视为关闭：do/later/drop/done 前须 reopen。目录以后搬走不影响读库，show 的 transferred_facts 标出是否还在。transfer 不写 seen。
+- 转交登记会话：转交提交后，把该事项全部 sources 按会话身份去重登记进目标任务的 `会话.md`（标签：立项前来源、`事项:<id>`、`锚点:<anchor>`），执行转交的当前会话也登记（标签：转交执行、`事项:<id>`）。逐会话写入，一个失败不影响其余；转交成功但登记部分失败 → 错误码 E_PARTIAL_FAILURE、退出 1，回执分开列转交结果与每条失败及补记命令。对已转交到**同一**任务的事项用当前 rev 重跑 transfer 只做登记补记，不改事项、不加 log、不需 reopen；目标不同仍退出 1。dry-run 走同一登记路径但不写文件。
 - 完成与重开：done 必须带非空 evidence，可由 assistant 基于实际证据记完成，不捏造用户确认；若附用户原话，照样核验。reopen 将 parked/dropped/done/transferred 设为 open（清掉 transferred_to，历史留在 log），需要明确用户原话。dropped/done/transferred 要再选 do/later/drop，先显式 reopen。
 - 默认可见性：list 默认显示 open/decided 并返回各态计数（含 transferred）；show/continue 返回卡片、来源、决定记录及引用 HANDOFF 的存在性和修改时间，不读取其内容、不执行任务。写入后读取回执并 show 确认，才可说已记下。
 - 历史已审：discover 只读，不自动 seen；当前 AI 完整审阅会话内容版本后显式 seen。相同版本下次跳过，内容变化须重审；分页中更新 seen 可以继续游标，历史内容变化使旧游标失效。当前环境会话默认排除。
-- 历史边界：普通 discover 每次读取所选 roots 内全部 JSONL，没有扫描缓存；limit/max_chars 仅限制返回页，files 可精确抽样。过滤可识别的 agent/headless、工具、系统、推理及压缩副本；旧格式人类身份不确定保留 legacy/unknown，不声称完整覆盖；本地缺失或删除不可恢复。导入的旧摘要与 checked/closed 仍只作来源资料及提醒关闭，不代表事项 done 或会话 seen。
+- 历史边界：普通 discover 每次读取所选 roots 内全部 `.jsonl` 与 Codex 压缩的 `.jsonl.zst`（默认 roots 含 Codex 的 sessions 与 archived_sessions），没有扫描缓存；zst 整帧解压校验通过才读，截断或损坏整份记为不可读、不吐出部分消息、来源核验不通过；同一会话号的多个文件互不为前缀时各自的消息都保留，不按行数取舍；limit/max_chars 仅限制返回页，files 可精确抽样。过滤可识别的 agent/headless、工具、系统、推理及压缩副本；旧格式人类身份不确定保留 legacy/unknown，不声称完整覆盖；本地缺失或删除不可恢复。导入的旧摘要与 checked/closed 仍只作来源资料及提醒关闭，不代表事项 done 或会话 seen。
 
 新增 I/O 契约：
 - 命令入口为 `thread add/list/show/set/choose/done/transfer/reopen/discover/seen`；后台及冻结录入为 `sweep` 子命令；复杂输入为 UTF-8 JSON 的 --input-file 或 stdin。JSON 输出信封为 ok/data/error/meta；成功 stdout，失败 stderr；退出码 0/1/2 = 成功/运行失败或冲突/输入错误。--ai-help/--help 始终输出帮助文档。
 - add 必需 title/sources；可编辑字段为 title/motivation/confirmed/questions/stopped_at/next_suggestion/paths/handoff。confirmed 是 {said, source} 数组，回读含 verified/verification_note；questions/paths/handoff 为字符串数组，next_suggestion 输入为文本、保存带 AI 标记。
-- source 必需 platform/session/anchor/time/role/excerpt/excerpt_hash，path 可选但原话核验需要它；excerpt_hash = UTF-8 摘录 SHA-256。选择输入为 said/source，said 须逐字包含于用户摘录；done 为 evidence 字符串数组并可附 said/source。
+- source 必需 platform/session/anchor/time/role/excerpt/excerpt_hash，path 可选但原话核验需要它；另可选 host/agentId/start_dir（agentId、start_dir 可为空串），转交登记会话时用作身份与起始目录；excerpt_hash = UTF-8 摘录 SHA-256。选择输入为 said/source，said 须逐字包含于用户摘录；done 为 evidence 字符串数组并可附 said/source。
 - discover 可用 roots/files/since/limit/max_chars/cursor/exclude_sessions/sweep_state；返回 sessions/next_cursor/coverage/warnings，消息含 source 与分片范围。seen 必需 platform/session/version。详细调用示例见 skill。
 - 全局库为 `PSTATE_HOME/threads/threads.json`（默认根同旧任务目录），备份为 bak.json，schema=1；事项有稳定 id、rev、state、sources 与 log。旧 tasks/locks 数据与入口继续兼容，无自动迁移。
 - 修改使用版本检查，失败不覆盖损坏或未知结构；主库缺失而备份存在时要求显式恢复。变更命令的 dry-run 与实际执行共用校验及事务路径，不写业务状态，仅可能创建协调锁。替换后读回核验；replaced_unverified 必须先核实际落库，不盲重试。
@@ -87,6 +89,16 @@
 - `run --no-judge` 不调模型；dry-run 不写业务资料/页、不调付费模型，仅可能建协调锁。JSON 信封及 0/1/2 退出码与事项命令一致。旧 session-sweep 顶层、隐藏启动器、模块与底层写/安装入口均拒绝执行。
 - 新计划任务只可从稳定活源的明文 run_hidden.pyw 注册，拒绝 worktree/版本缓存（含预演）。隐藏入口无窗口拉起固定白名单 Python、返回真实退出码，诊断写 `sweep/last_launch.log`；注册任务不等于启用 writer。
 
+### 2.9 任务会话登记（会话.md）
+- 用户要的是：任务建好后，所有在这个任务里干过活的会话都挂在任务上，不只创建那次。任务目录下的 `会话.md` 是任务↔会话关联的唯一事实源，Obsidian 里直接可见、随任务目录搬家。
+- 入口：claim / take 成功后自动登记（2.2）；thread transfer 登记全部来源与执行会话（2.6）；显式 `link`。release、会话结束、take 走认领都不删已有登记。
+- `link <任务目录> [--platform claude|codex --session ID [--agent ID]] [--reason 标签]...`：给出 --platform 与 --session（须成对）就用它们；省略时，环境变量 CLAUDE_CODE_SESSION_ID 与 CODEX_THREAD_ID **恰有一个**有值才取它作默认，两个都有（如 Claude 派出的 Codex 子进程继承了父变量）或都没有 → 退出 2 要求显式参数。不需要认领、不需要会话还活着、不需要原文已存档，可补录历史会话和派出的子 agent 会话。标签固定含 link，--reason 可重复，`--reason -` 从 UTF-8 stdin 读。支持 --dry-run（同一写路径，不落盘）、--json / --format json（ok/data/error/meta 信封）、--ai-help。任务目录须已存在且形如 `…/task/Tnn-名称`，否则退出 2；写入失败退出 1。
+- 身份键 = 主机 + 平台 + 原生会话号 + agentId（可空）。同一身份再次登记只合并标签，不新增行，首次关联时间不变。起始目录只在有可靠来源时填，绝不拿执行命令时的 cwd 冒充；已有值不被不同来源改写。主机取本机名，不读 hub 配置。
+- 文件格式（UTF-8 明文）：受管区由 `<!-- pstate:sessions:begin v1 -->` 与 `<!-- pstate:sessions:end -->` 包住，区内依次为表头 `| 首次关联时间 | 主机 | 平台 | 原生会话号 | agentId | 关联依据 | 起始目录 |`、分隔行、每会话一行；首次关联时间为本机时区 ISO 时间精确到秒，关联依据为标签的 JSON 字符串数组（排序、去重、非空），单元格内 `|`、换行等做转义。区外内容（人工说明）原样保留。文件不存在时新建并附一句“pstate 维护下方受管区”。
+- 损坏不重建：起止标记缺失或重复、表头不符、行解析不了、时间或标签非法、身份重复、文件是符号链接 → 退出 1 并保留原文件，要求人工检查。写入时在本任务的短锁内重读、合并、写临时文件再原子替换；替换前发现文件被他人改过也拒绝。两个进程同时登记同一任务，两条都留下。
+- 短锁位置 `PSTATE_HOME/session-links/<任务真实路径键的 SHA-256>/`，不落进 Obsidian 任务目录；不与认领锁、事项库锁嵌套持有（认领或转交先完成、释放其锁，再登记）。
+- 不依赖 hub：不导入 hub、不读写 hub 的文件或索引；hub 需要反向显示时自己读 `会话.md`。不做自动推断：不按 cwd、不按正文、不按改过哪个仓去猜会话属于哪个任务。
+
 ## 3. 边界 / 明确不做
 - 全局事项面向个人讨论与决定，允许无工程；公司事项不自动收录。不做统一项目管理：不导入 Obsidian 项目、不同步 README、不扫 HANDOFF、不建总看板。
 - 不复制施工进度：进度和交接归 HANDOFF；事项的历史停点必须注明截至时间。
@@ -95,12 +107,14 @@
 - 不按超时自动释放、不自动接手：对话日志时间只说明它多久没动。
 - 后台只在显式切换后按配置运行，不暗调额外模型、不做 GUI、不增加 API/BYOK、不自动执行事项或全量导入事项。
 - 不进 git、不进 hub 长期记忆；不做跨机器同步。
-- 任务认领与文件锁仍只覆盖 Claude Code；Codex 可用全局 thread CLI/skill 与开始注入壳，未实现认领与施工锁。
-- 版本切换：新状态 transferred 与认领表只有 0.5.0 起认得。两平台 manifest、插件缓存、稳定活源与后台一起发布；旧版读到含 transferred 的事项库会拒绝读（不会改坏）。旧版写在 locks.json 的看板认领在 0.5.0 里被忽略。
+- 任务认领与文件锁仍只覆盖 Claude Code；Codex 可用全局 thread CLI/skill、开始注入壳与 `link` 登记会话，未实现认领与施工锁。
+- 会话登记只记经过 claim / take / transfer / link 的会话；漏登记的工作不会被自动补上，登记也只证明“关联过”，不证明实际完成了工作。
+- 版本切换：新状态 transferred 与认领表只有 0.5.0 起认得。两平台 manifest、插件缓存、稳定活源与后台一起发布；旧版读到含 transferred 的事项库会拒绝读（不会改坏）。旧版写在 locks.json 的看板认领在 0.5.0 里被忽略。`会话.md` 登记、`link` 命令与 Codex `.jsonl.zst` 历史读取从 0.6.0 起才有。
 
 ## 4. 硬约束 + 重构自由声明
 - 状态放仓库外本机目录；全局事项与任务认领与工程正交，不依赖 Git。文件锁按 git common dir 识别同仓，所有 worktree 落到同一份。
-- 不同时持有全局认领锁与仓库锁；只读显示路径不加锁、不清理、不写回。
+- 不同时持有全局认领锁与仓库锁；会话登记锁也不与认领锁、事项库锁嵌套；只读显示路径不加锁、不清理、不写回。
+- 任务↔会话关联只存在任务目录 `会话.md` 的受管区，不另建全局关联库；受管区损坏绝不当空表重建。
 - 锁的身份挂在会话进程上（进程号 + 进程创建时间），不靠手写认领；"检查冲突 + 登记占用"必须原子。
 - 撞上占用必须拦下（不是只提醒），并给出能让用户做决定的信息。
 - 钩子任何出错（参数错、超时、锁文件忙、认不出会话）都放行：退出 0、不输出，绝不因为它挡住会话。
@@ -134,7 +148,7 @@
 
 | 平台 | 能力范围 | 支持状态 / 降级表现 | 已验证范围 |
 |---|---|---|---|
-| Claude Code | 会话开始注入 + 写入前裁决 + skill | 已支持 | 2026-10-09：单元 + 真 git 端到端（假进程后端）22 条；真实 headless 会话经钩子被拦下并照提示停下问用户、`take` 后重试成功、会话结束后占用释放；真实进程链认出会话进程。尚未经插件安装后的交互会话验证。0.5.0：全局任务认领、带 --cwd 的接手提示、旧看板停用、转交，单元＋真 git 端到端（假进程后端）通过，同样未经安装后交互会话验证 |
+| Claude Code | 会话开始注入 + 写入前裁决 + skill | 已支持 | 2026-10-09：单元 + 真 git 端到端（假进程后端）22 条；真实 headless 会话经钩子被拦下并照提示停下问用户、`take` 后重试成功、会话结束后占用释放；真实进程链认出会话进程。尚未经插件安装后的交互会话验证。0.5.0：全局任务认领、带 --cwd 的接手提示、旧看板停用、转交，单元＋真 git 端到端（假进程后端）通过，同样未经安装后交互会话验证。0.6.0：会话登记（claim/take/link/transfer、并发、损坏拒写、zst 历史）全量单元 237 条通过，临时 PSTATE_HOME 下真实 CLI 冒烟通过；未经安装后交互会话验证 |
 | Codex | 会话开始注入壳 + skill | 锁未适配，claim/take/release 不可用 | 本批只核脚本及纯翻译，不代表安装后平台钩子已验证 |
 | Claude / Codex 本地历史与全局事项 | thread CLI、纯正文提取、来源核验及选择 | CLI 可脱离 Git；历史覆盖限本地可读样式 | merge-b1 独立验收 P 全仓 200/200、CLI 契约 7/7；合成迁移、冻结录入、双版本、真实跨进程与 Windows junction、隐藏入口均通过约定范围。S 47/47 独立验收且复验指纹未变。0.4.0 已发布并刷新两平台缓存，新进程 CLI 通过；正式导入/对账/切换及原资料保全经独立验收。安装后新宿主交互 hook 尚未观察 |
 | Windows 后台与正式联合页 | 稳定隐藏入口、唯一写者与计划任务 | 已显式启用，保留原配置的登录/每4小时触发、IgnoreNew 与1小时限时 | merge-b2：隔离恢复链路13步、正式 no-judge 及隐藏入口通过；真实任务手动触发后自然完成，默认模型调用20次、失败0，任务 Ready/enabled/LastTaskResult0；运行中重入未产生新 writer。原168条来源、15条关闭映射、7页全文及原路径保全，threads/seen与旧state不变。未来自然登录/4小时重复触发未观察；详见 evidence/merge-b2/independent-audit.md |

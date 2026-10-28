@@ -1,5 +1,7 @@
 """Shared parsing primitives; these functions never persist history state."""
 import hashlib
+import io
+from compression import zstd
 import json
 import re
 from pathlib import Path
@@ -40,7 +42,12 @@ def injected(text):
 def read_rows(path, warnings, counts):
     rows = []
     try:
-        with Path(path).open(encoding="utf-8-sig") as stream:
+        if str(path).endswith(".jsonl.zst"):
+            # Validate the entire frame before exposing any rows to discovery/verification.
+            stream = io.StringIO(zstd.decompress(Path(path).read_bytes()).decode("utf-8-sig"))
+        else:
+            stream = Path(path).open(encoding="utf-8-sig")
+        with stream:
             for number, line in enumerate(stream, 1):
                 if not line.strip():
                     continue
@@ -53,7 +60,8 @@ def read_rows(path, warnings, counts):
                     warnings.append({"kind": "malformed_line", "path": str(path), "line": number})
                     continue
                 rows.append((str(Path(path).resolve()), number, row))
-    except (OSError, UnicodeError) as exc:
+    except (OSError, UnicodeError, zstd.ZstdError) as exc:
+        rows.clear()
         counts["unreadable"] += 1
         warnings.append({"kind": "unreadable", "path": str(path), "reason": str(exc)})
     return rows

@@ -19,15 +19,15 @@ HELP = {
         'choose': 'choose ID continue|do|later|drop; continue read-only; others require --rev N, said/source JSON',
         'done': 'done ID --rev N; evidence (nonempty string list); optional said/source, otherwise actor=assistant',
         'reopen': 'reopen ID --rev N; said/source; explicit reopening of parked/dropped/done/transferred (clears transferred_to)',
-        'transfer': 'transfer ID --rev N; JSON to (existing task directory .../task/Tnn-name) + evidence list; only from decided set by a verified do; closes the thread',
+        'transfer': 'transfer ID --rev N; JSON to (existing task directory .../task/Tnn-name) + evidence list; from verified decided, or replay transferred to the same task to repair session links',
         'discover': 'optional JSON roots/cursor/limit/max_chars/since/exclude_sessions/sweep_state; read-only, not auto-seen',
         'seen': 'JSON platform/session/version; explicit review acknowledgement'},
     'source': {'required': ['platform', 'session', 'anchor', 'time', 'role', 'excerpt', 'excerpt_hash'],
-               'optional': ['path'], 'excerpt_hash': 'SHA-256 of UTF-8 excerpt'},
+               'optional': ['path', 'host', 'agentId', 'start_dir'], 'excerpt_hash': 'SHA-256 of UTF-8 excerpt'},
     'decisions': 'said is a verbatim user quotation contained in source.excerpt. Verification checks origin, never intent. Unverified origins return confirmed=false.',
     'options': ['--json', '--format json', '--dry-run (mutations)', '--ai-help'],
     'exits': {'0': 'success', '1': 'operational error/conflict', '2': 'invalid usage'},
-    'safety': 'No task/file creation by do or transfer. New sources never reopen a closed item. No extra model calls.'}
+    'safety': 'transfer writes task session links after committing the thread; do creates no files. New sources never reopen a closed item. No extra model calls.'}
 TASK_DIR = re.compile(r'^T\d+')
 
 
@@ -51,7 +51,7 @@ Recall unfinished conversations and let the user decide what to continue. Works 
 ## Command Reference
 ''' + commands + '''
 
-Required source fields: platform/session/anchor/time/role/excerpt/excerpt_hash; optional path.
+Required source fields: platform/session/anchor/time/role/excerpt/excerpt_hash; optional path/host/agentId/start_dir.
 excerpt_hash is SHA-256 of UTF-8 excerpt. An item's sources identify exact original messages.
 Complex fields use --input-file PATH or --input-file - (stdin); omitted input reads piped stdin except discover defaults to {}.
 set requires --rev; choices other than continue require --rev and said/source. done requires --rev and evidence, with optional said/source.
@@ -66,6 +66,8 @@ All those mutations support --dry-run through the same transaction path; only a 
 list/show/choose continue read state; show/continue inspect HANDOFF metadata without executing or changing its contents.
 discover reads requested local history and optional session-sweep state; it does not call a model, write history or automatically mark seen.
 No command here creates an execution task, edits a project or uses the network. do records a decision only.
+transfer writes task/会话.md source and executor links after committing; errors report transfer and linking separately.
+Replay transfer to the same task with current --rev repairs links without reopening or changing the thread.
 transfer closes a decided thread after its goal, conclusions and open questions were written into an existing task directory; it verifies only that the directory exists and is named .../task/Tnn-name.
 Source verification checks the message origin, not semantic authorization; failed verification remains explicit confirmed=false.
 Historical sources never reopen parked/dropped/done items. Reopening needs an explicit user quotation.
@@ -197,9 +199,18 @@ def dispatch(args, directory):
     if op in ('add', 'set') and 'confirmed' in payload:
         quotations = fields({'confirmed': payload['confirmed']})['confirmed']
         verification = {'confirmed_entries': [verify(entry) for entry in quotations]}
-    return store.mutate(directory, op, payload, ident=getattr(args, 'id', None), rev=getattr(args, 'rev', None),
-                        into=getattr(args, 'into', None), distinct=getattr(args, 'distinct', False),
-                        verified=verification, dry_run=args.dry_run)
+    result = store.mutate(directory, op, payload, ident=getattr(args, 'id', None), rev=getattr(args, 'rev', None),
+                          into=getattr(args, 'into', None), distinct=getattr(args, 'distinct', False),
+                          verified=verification, dry_run=args.dry_run)
+    if op == 'transfer':
+        from pstate_sessions import link_transfer
+        result['transfer_succeeded'] = not args.dry_run
+        result['associations'] = link_transfer(directory.parent, result['item'], dry_run=args.dry_run)
+        if not result['associations']['ok']:
+            message = ('转交预演关联失败；未写业务资料' if args.dry_run else
+                       '转交已成功，关联会话部分失败；可对同一任务重跑 transfer 补记')
+            raise ThreadError(message, 'E_PARTIAL_FAILURE', 1, result)
+    return result
 
 
 def task_dir(value):

@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import pstate_lock as L
+import pstate_sessions as S
 
 # ===== 1 配置/常量 =====
 STATE_HOME_ENV = "PSTATE_HOME"
@@ -352,7 +353,7 @@ def cmd_claim(args):
               f"问他等对方还是接手；用户说接手再跑：take \"{real}\"", file=sys.stderr)
         return 1
     print(f"已认领 {L.task_label(real)}（会话 {L.short(me['sid'])}）")
-    return 0
+    return S.link_claim(state_home(), real, me["sid"], "claim")
 
 
 def cmd_release(args):
@@ -398,7 +399,7 @@ def take_task(target, me, backend):
         return 1
     print(f"已接手任务 {L.task_label(real)}（原认领会话 {L.short(prev)}）。只转了这一项认领，"
           "对方在各仓库的文件占用没动；写文件被拦时按拦截提示里的 --cwd <仓库> take <会话号> 处理")
-    return 0
+    return S.link_claim(state_home(), real, me["sid"], "take")
 
 
 def cmd_take(args):
@@ -612,6 +613,7 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("thread", help="全局待续事项；thread --ai-help 查看结构化契约")
     sub.add_parser("sweep", help="内部后台与联合回顾页；sweep --ai-help 查看契约")
+    sub.add_parser("link", help="显式关联任务会话；link --help 查看参数")
     sub.add_parser("status", help="工作区现场 + 活会话 + 全局任务认领（+ 待收尾的旧看板条目）")
     p = sub.add_parser("new", help="（已停用）旧看板新建条目，现在一律拒绝")
     p.add_argument("slug")
@@ -638,6 +640,9 @@ def build_parser():
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     routed = argv[2:] if argv[:1] == ["--cwd"] and len(argv) > 2 else argv
+    if routed[:1] == ["link"]:
+        from pstate_sessions_cli import main as link_main
+        return link_main(routed[1:], state_home())
     if routed[:1] == ["sweep"]:
         from pstate_sweep.cli import main as sweep_main
         return sweep_main(routed[1:], state_home())

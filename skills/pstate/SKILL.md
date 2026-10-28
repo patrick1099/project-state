@@ -148,6 +148,8 @@ thread 的 JSON 信封为 ok/data/error/meta；成功在 stdout，失败在 stde
 ## 施工认领与文件锁
 
 - **任务认领（全局，与 git 仓无关）**：`claim <Obsidian 任务目录绝对路径>` 认的是“这件事谁在干”，防同一件事被两个会话各做一遍。存在 PSTATE_HOME/claims/，从哪个目录启动都一样。被拒说明别的活会话在干，停下问用户；用户说接手才 `take <任务目录>`，只转这一项认领。
+- **任务会话**：claim/take 成功后自动写任务目录 `会话.md`；release 和会话结束不删关联。显式补记用 `link <任务目录> --platform claude|codex --session ID [--agent ID] [--reason 标签]`，无需认领或活会话。省略身份仅在 CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID 恰有一个时取默认；两者都在须显式指定。
+- 派 Codex 等子 agent 到任务干活后，主会话用 `link <任务目录> --platform codex --session <派工回执里的 session id>` 登记。转交写全部 sources 和执行会话；关联失败可对同一目标、当前 rev 重跑 transfer 补记，无需 reopen。
 - **文件锁（按仓库）**：个人工程按蓝图识别，`lock on|off|auto` 可设置。原生编辑前按仓库相对路径占用，跨 worktree 同路径也互斥；进程结束、会话结束或满足合并清理条件时释放。同进程/祖先会话放行，兄弟 headless 会话仍互斥。文件锁不需要先 claim。
 - 遇到“[pstate 锁]”必须停下，向用户说明占用者、worktree、它认领的任务及时间，询问等候还是接手；用户明确接手才照提示跑 `--cwd <被写文件所在仓库> take <会话号>` 后重试，只转该仓文件占用，不用 shell/python 绕过。
 - `release` 放掉本会话全部任务认领，以及 `--cwd` 所在仓库的文件占用（不在仓库里时会说明文件占用没处理）。squash/cherry-pick 合并或放弃施工时跑。闲置多久都不是自动接手授权。
