@@ -176,6 +176,8 @@ def evolve(state, op, payload, now, ident, rev=None, into=None, distinct=False, 
         add_sources(item, srcs)
         state['items'][ident] = item
         return {'id': ident, 'similar': similar}
+    if op == 'pickup':
+        return pickup(get_item(state, ident), payload, now)
     item = get_item(state, ident)
     check_rev(item, rev)
     if op == 'transfer':
@@ -218,6 +220,21 @@ def evolve(state, op, payload, now, ident, rev=None, into=None, distinct=False, 
     item['rev'] += 1
     item['log'].append(event)
     return {'id': ident, **({'confirmed': event['confirmed'], 'verification': verification} if 'confirmed' in event else {})}
+
+
+def pickup(item, payload, now):
+    """Internal: no external rev, because state is re-read under the same lock as the write."""
+    if set(payload) != {'source'}:
+        raise ThreadError('pickup requires source only')
+    src = source(payload['source'])
+    if item['state'] not in ('open', 'decided'):
+        return {'id': item['id'], 'linked': False, 'reason': 'not_active'}
+    if any((s['platform'], s['session']) == (src['platform'], src['session']) for s in item['sources']):
+        return {'id': item['id'], 'linked': False, 'reason': 'already_source'}
+    add_sources(item, [src])
+    item['rev'] += 1
+    item['log'].append({'at': now, 'action': 'append_sources', 'via': 'pickup'})
+    return {'id': item['id'], 'linked': True, 'reason': 'picked_up'}
 
 
 def last_decision(item):

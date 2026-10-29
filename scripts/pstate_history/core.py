@@ -2,6 +2,7 @@
 import base64
 import json
 import os
+import re
 from pathlib import Path
 from . import claude, codex, sweep
 from .common import digest, read_rows, redact
@@ -11,9 +12,10 @@ DEFAULT_ROOTS = {
     "codex": (Path.home() / ".codex" / "sessions", Path.home() / ".codex" / "archived_sessions"),
 }
 PLATFORMS = {
-    "claude": {"parse": claude.parse, "parse_all": claude.parse_all, "imports": True,
-               "sweep_hints": True, "background": True},
-    "codex": {"parse": codex.parse, "parse_all": codex.parse_all, "background": False},
+    "claude": {"parse": claude.parse, "parse_all": claude.parse_all, "locate": claude.locate,
+               "session_env": "CLAUDE_CODE_SESSION_ID", "imports": True, "sweep_hints": True, "background": True},
+    "codex": {"parse": codex.parse, "parse_all": codex.parse_all, "locate": codex.locate,
+              "session_env": "CODEX_THREAD_ID", "background": False},
 }
 
 
@@ -28,6 +30,13 @@ def roots_for(options, platform):
 def source_for(session, item, text=None):
     excerpt = (redact(item["text"] if text is None else text).strip() or redact(item["text"]).strip())[:400]
     return {"platform": session["platform"], "session": session["session"], "anchor": item["anchor"], "time": item["time"], "role": item["role"], "excerpt": excerpt, "excerpt_hash": digest(excerpt), "path": item["path"]}
+
+
+def session_log(platform, session, options=None):
+    """Native log of one session by its ID; the current session is excluded from discover, so look it up here."""
+    if platform not in PLATFORMS or not re.fullmatch(r"[\w.-]+", session or ""):
+        return None
+    return next(PLATFORMS[platform]["locate"](roots_for(options or {}, platform), session), None)
 
 
 def enumerate_paths(roots, warnings, counts):

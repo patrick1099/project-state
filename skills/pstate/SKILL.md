@@ -1,6 +1,6 @@
 ---
 name: pstate
-description: 全局待续事项回顾与个人工程会话锁。Use when the user asks 回忆以前聊过什么 / 哪些事还能继续 / 继续聊 / 记下来 / 先放着 / 不做了 / 现在有哪些活; proactively capture substantive personal ideas in the current conversation; also use for a pstate lock denial, claiming an Obsidian task directory (claim/take/release), or handing a decided matter over to an Obsidian task (thread transfer). Current AI reviews bounded history and captures matters; an explicitly enabled internal sweep retains durable source summaries and unified Obsidian reminders. No GUI or automatic matter import. Progress stays in HANDOFF; company matters are not automatically captured.
+description: 全局待续事项回顾与个人工程会话锁。Use when the user asks 回忆以前聊过什么 / 哪些事还能继续 / 继续聊 / 继续做或接着做某件以前聊过的事 / 还有啥没做完 / 记下来 / 先放着 / 不做了 / 现在有哪些活; proactively capture substantive personal ideas in the current conversation; also use for a pstate lock denial, claiming an Obsidian task directory (claim/take/release), or handing a decided matter over to an Obsidian task (thread transfer). Current AI reviews bounded history and captures matters; an explicitly enabled internal sweep retains durable source summaries and unified Obsidian reminders. No GUI or automatic matter import. Progress stays in HANDOFF; company matters are not automatically captured.
 ---
 
 # pstate：待续事项与工程施工
@@ -41,8 +41,9 @@ add 创建 open，追加来源不改变已有状态；新来源绝不自动重�
 卡片常在会话中途记下，之后同一会话接着把事做完或推进了。卡片不跟着改，下次回顾就会把旧停点当现状报给用户。
 
 - **会话内**：当前会话是某张 open/decided 卡的来源时，每轮开头会注入「[pstate 卡片]」提醒。这轮做完后自己判断：已做完 → `thread done`，evidence 写实际提交、产物和验证范围；有实质进展或结论变了 → `thread set` 更新 stopped_at / next_suggestion / questions；没碰它就不动。不用等用户开口，改完在回复里一句话告诉用户改了什么。
+- **接手**：用户说“继续做 X / 接着做以前聊过的那件事 / 还有啥没做完”时，先 `thread list` 找到对应的卡，走 `thread choose ID continue`。它会把本会话登记成卡片来源（回执 `session_linked`），之后本会话每轮也收到上面的提醒，回顾时也查本会话日志。`thread set` 同样会登记。`linked=false` 不影响命令本身，reason 说明了原因（已是来源、卡不是 open/decided、认不出会话或找不到日志）。
 - **回顾时**：list/show 的卡片带 `possibly_stale` 和 `followups`（来源会话在 `last_touched` 之后的用户消息条数）。报给用户之前，先用 discover 的 files 模式读这些后续消息，按上一条自己 done 或 set，再给用户看更新后的卡片；不要原样转述可能过期的停点。
-- 别的会话里做掉的事两者都抓不到：声称现状前照旧核 Git、成果和 HANDOFF。
+- 没经过 continue/set 接手、在别的会话里直接做掉的事仍然抓不到：声称现状前照旧核 Git、成果和 HANDOFF。
 - AI 自己判断的只有 done/set；do/later/drop/reopen 仍然要用户原话。
 
 ## 历史回顾：当前 AI 先读，用户只看卡片
@@ -82,7 +83,7 @@ add 创建 open，追加来源不改变已有状态；新来源绝不自动重�
 
 | 用户意思 | 命令 | 实际效果 |
 |---|---|---|
-| 继续聊 | thread choose ID continue --json | 只恢复卡片供接着聊，状态和 rev 不变；不传 rev/input-file/dry-run |
+| 继续聊 / 接着做 | thread choose ID continue --json | 恢复卡片供接着聊，状态不变；把本会话登记为来源（open/decided 卡且本会话还不是来源时 rev+1，看回执 session_linked）；不传 rev/input-file，可 --dry-run |
 | 决定做 | thread choose ID do --rev N --input-file choice.json --json | 记为 decided，仅记录决定，不创建执行任务、不改项目 |
 | 先放着 | thread choose ID later --rev N --input-file choice.json --json | 记为 parked，默认列表隐藏，可用 list --state parked 或 list --all 找回 |
 | 不做了 | thread choose ID drop --rev N --input-file choice.json --json | 记为 dropped，保留决定及来源 |

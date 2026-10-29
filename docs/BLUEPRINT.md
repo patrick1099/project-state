@@ -51,9 +51,10 @@
 - 当前会话主动收录：个人想法已有实质内容且值得跨会话继续 → 当前 AI 形成 open 卡片，记录动机、有效结论、未定问题、带时间的历史停点和来源。收录不等于承诺；公司事项不自动收录。事项关联 0..N 个工程路径，可无 Git；会话、仓库、worktree 都不是事项身份。
 - 历史发现：给 Claude/Codex 本地历史范围 → 返回有界纯正文、原生消息来源、内容版本、覆盖统计和续页游标。当前 AI 阅读、筛选、拆分与归并后 add；用户看可继续的卡片，不逐页筛原文。交互 discover 不做语义判断、不另调模型；后台判断单独显式启用，不自动全量导入事项。
 - 来源与时效：保留原话的来源平台、会话、锚点、时间、角色、摘录及哈希；来源核验失败明确标未核验。核验只证明原话出处，不证明其授权含义。AI 建议单独标识；历史卡可保留带时间和来源的当时停点，声称当前现状或真正恢复执行前才由当前 AI 查 Git、成果和 HANDOFF。历史 stopped_at 必须带截至时间，不能冒充当前进度。
-- 卡片跟着现状走：卡片常在会话中途记下，同一会话随后把事做完或推进。当前会话是 open/decided 卡的来源时，每轮开头提醒 AI：做完就自己 done（带证据）、有进展就 set，改了告诉用户；回顾时 list/show 对来源会话在卡片最后更新后又有用户消息的卡标 possibly_stale。AI 判断完成不需用户先开口；do/later/drop/reopen 仍要用户原话。别的会话里做掉的事两者都抓不到，声称现状前照旧核 Git、成果和 HANDOFF。
+- 卡片跟着现状走：卡片常在会话中途记下，同一会话随后把事做完或推进。当前会话是 open/decided 卡的来源时，每轮开头提醒 AI：做完就自己 done（带证据）、有进展就 set，改了告诉用户；回顾时 list/show 对来源会话在卡片最后更新后又有用户消息的卡标 possibly_stale。AI 判断完成不需用户先开口；do/later/drop/reopen 仍要用户原话。没经过 continue/set 接手、在别的会话里直接做掉的事两者都抓不到，声称现状前照旧核 Git、成果和 HANDOFF。
+- 接手登记：continue 与 set 把当前会话（CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID 恰有一个时取）最近一条原生用户消息追加为来源。条件：卡为 open/decided、本会话尚非来源；成功则 rev+1，log 记 append_sources（via=pickup）。在同一把事项锁内重读状态再写，不需外部 rev。日志按会话号直接定位（Claude `projects/*/<sid>.jsonl`；Codex `sessions`、`archived_sessions` 下 `rollout-*-<sid>.jsonl[.zst]`），不走 discover（它排除当前会话）。认不出会话、找不到日志、没有原生用户消息或写入失败时不登记、不让命令失败，回执 session_linked {linked, reason} 说明。set 预演时登记预演串在同一预演状态上。登记后该会话与原来源同等：每轮提醒、回顾时查其日志。不改 schema。
 - 归并与幂等：重复收录相同标题及来源可返回已有 ID；同锚点拆成不同事项须明确 --distinct，追加到已有事项用 --into ID --rev N，且仅追加来源。改摘要走 set。新来源不能重开 parked/dropped/done/transferred；同名仅提供相似提示，不自动合并。
-- 四个选择：continue 只返回卡片，状态和版本不变；do → decided，仅记录决定，不创建任务或执行工作；later → parked，默认隐藏但 list --all/--state parked 可找回；drop → dropped，保留决定记录。do/later/drop 需要用户原话及来源。
+- 四个选择：continue 返回卡片、状态不变，并做接手登记（登记成功时版本+1，可 --dry-run，不接 --rev/--input-file）；do → decided，仅记录决定，不创建任务或执行工作；later → parked，默认隐藏但 list --all/--state parked 可找回；drop → dropped，保留决定记录。do/later/drop 需要用户原话及来源。
 - 转交（transfer ID --rev N，输入 {to, evidence}）：只允许 decided → transferred，且让它进入 decided 的那次 do 原话已核验（confirmed=true），否则退出 1；to 必须是已存在的绝对路径任务目录 `…/task/Tnn-名称`（不符退出 2，CLI 只核这一点，内容是否交接由 evidence 如实写），保存为规范化真实路径；evidence 为非空字符串数组。记录 transferred_to 字段，log 留 to、evidence、时间、actor=assistant。transferred_to 只能由 transfer 写，add/set 不能改。transferred 视为关闭：do/later/drop/done 前须 reopen。目录以后搬走不影响读库，show 的 transferred_facts 标出是否还在。transfer 不写 seen。
 - 转交登记会话：转交提交后，把该事项全部 sources 按会话身份去重登记进目标任务的 `会话.md`（标签：立项前来源、`事项:<id>`、`锚点:<anchor>`），执行转交的当前会话也登记（标签：转交执行、`事项:<id>`）。逐会话写入，一个失败不影响其余；转交成功但登记部分失败 → 错误码 E_PARTIAL_FAILURE、退出 1，回执分开列转交结果与每条失败及补记命令。对已转交到**同一**任务的事项用当前 rev 重跑 transfer 只做登记补记，不改事项、不加 log、不需 reopen；目标不同仍退出 1。dry-run 走同一登记路径但不写文件。
 - 完成与重开：done 必须带非空 evidence，可由 assistant 基于实际证据记完成，不捏造用户确认；若附用户原话，照样核验。reopen 将 parked/dropped/done/transferred 设为 open（清掉 transferred_to，历史留在 log），需要明确用户原话。dropped/done/transferred 要再选 do/later/drop，先显式 reopen。
@@ -131,6 +132,7 @@
 - 进度一旦写进记忆就会过期还被自动注入，误导后来的会话；旧条目和已转交的事项都必须移出活跃视图。
 - 认领表读不了不能当空表：当空表写回会把别人的认领全抹掉，而且没有任何报错。
 - 卡片在会话中途记下、同一会话接着把事做完，没有提醒时卡片会一直停在旧停点，回顾的 AI 再原样转述成现状（2026-10-29 实测 4 张 open 卡里 2 张过期、1 张有未记进展）。
+- 卡片在 A 会话记下、活在 B 会话干时，只认来源会话的提醒和过期标记都看不到 B；B 接手卡片那一刻不登记，卡片同样停在旧停点（0.8.0 起 continue/set 接手登记）。
 - 本机有 Esafenet 透明加密：`.py` 落盘是密文但 python 能跑；`.md`、`.json` 实测是明文，任何工具都能直接读写。
 
 ## 6. 平台约定
@@ -157,7 +159,7 @@
 
 | 平台 | 能力范围 | 支持状态 / 降级表现 | 已验证范围 |
 |---|---|---|---|
-| Claude Code | 会话开始注入 + 每轮来源卡提醒 + 写入前裁决 + skill | 已支持 | 2026-10-09：单元 + 真 git 端到端（假进程后端）22 条；真实 headless 会话经钩子被拦下并照提示停下问用户、`take` 后重试成功、会话结束后占用释放；真实进程链认出会话进程。尚未经插件安装后的交互会话验证。0.5.0：全局任务认领、带 --cwd 的接手提示、旧看板停用、转交，单元＋真 git 端到端（假进程后端）通过，同样未经安装后交互会话验证。0.6.0：会话登记（claim/take/link/transfer、并发、损坏拒写、zst 历史）全量单元 237 条通过，临时 PSTATE_HOME 下真实 CLI 冒烟通过；未经安装后交互会话验证。0.7.0：来源卡提醒与 possibly_stale 新增单元 3 条通过，正式事项库只读冒烟（T04 卡被标过期、提醒只注入来源会话）；安装后交互钩子未观察 |
-| Codex | 会话开始注入壳 + 每轮来源卡提醒 + skill | 锁未适配，claim/take/release 不可用 | 本批只核脚本及纯翻译，不代表安装后平台钩子已验证；0.7.0 的 UserPromptSubmit 同样只核脚本 |
+| Claude Code | 会话开始注入 + 每轮来源卡提醒 + 写入前裁决 + skill | 已支持 | 2026-10-09：单元 + 真 git 端到端（假进程后端）22 条；真实 headless 会话经钩子被拦下并照提示停下问用户、`take` 后重试成功、会话结束后占用释放；真实进程链认出会话进程。尚未经插件安装后的交互会话验证。0.5.0：全局任务认领、带 --cwd 的接手提示、旧看板停用、转交，单元＋真 git 端到端（假进程后端）通过，同样未经安装后交互会话验证。0.6.0：会话登记（claim/take/link/transfer、并发、损坏拒写、zst 历史）全量单元 237 条通过，临时 PSTATE_HOME 下真实 CLI 冒烟通过；未经安装后交互会话验证。0.7.0：来源卡提醒与 possibly_stale 新增单元 3 条通过，正式事项库只读冒烟（T04 卡被标过期、提醒只注入来源会话）；安装后交互钩子未观察。0.8.0：接手登记新增单元 3 条通过（含 Codex rollout 定位），临时 PSTATE_HOME 下用真实会话日志冒烟；安装后交互会话未观察 |
+| Codex | 会话开始注入壳 + 每轮来源卡提醒 + skill | 锁未适配，claim/take/release 不可用 | 本批只核脚本及纯翻译，不代表安装后平台钩子已验证；0.7.0 的 UserPromptSubmit 同样只核脚本；0.8.0 接手登记按 CODEX_THREAD_ID 定位 rollout，只核单元 |
 | Claude / Codex 本地历史与全局事项 | thread CLI、纯正文提取、来源核验及选择 | CLI 可脱离 Git；历史覆盖限本地可读样式 | merge-b1 独立验收 P 全仓 200/200、CLI 契约 7/7；合成迁移、冻结录入、双版本、真实跨进程与 Windows junction、隐藏入口均通过约定范围。S 47/47 独立验收且复验指纹未变。0.4.0 已发布并刷新两平台缓存，新进程 CLI 通过；正式导入/对账/切换及原资料保全经独立验收。安装后新宿主交互 hook 尚未观察 |
 | Windows 后台与正式联合页 | 稳定隐藏入口、唯一写者与计划任务 | 已显式启用，保留原配置的登录/每4小时触发、IgnoreNew 与1小时限时 | merge-b2：隔离恢复链路13步、正式 no-judge 及隐藏入口通过；真实任务手动触发后自然完成，默认模型调用20次、失败0，任务 Ready/enabled/LastTaskResult0；运行中重入未产生新 writer。原168条来源、15条关闭映射、7页全文及原路径保全，threads/seen与旧state不变。未来自然登录/4小时重复触发未观察；详见 evidence/merge-b2/independent-audit.md |

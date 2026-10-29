@@ -11,7 +11,7 @@
 
 ## 约定
 
-- 唯一事项生命周期在 threads.json schema1；thread 只管立项之前，决定做后 transfer 给 Obsidian 任务目录。施工进度仍在 HANDOFF，全局事项只保留来源、决定和有时间的历史停点。
+- 唯一事项生命周期在 threads.json schema1；thread 只管立项之前，决定做后 transfer 给 Obsidian 任务目录。施工进度仍在 HANDOFF，全局事项只保留来源、决定和有时间的历史停点。continue/set 自动把当前会话登记为卡片来源（scripts/pstate_threads/pickup.py；按会话号直接定位日志，不走 discover）。
 - 任务认领在 PSTATE_HOME/claims/task-claims.json（全局，认 Obsidian 任务目录）；文件锁在各仓 locks.json。两把短锁不嵌套持有，只读显示不加锁不写回，认领表坏了报错不覆盖。旧看板 new 一律拒绝，旧条目只读到 done 收尾。
 - 任务↔会话关联唯一存在任务目录 `会话.md` 受管区（scripts/pstate_sessions.py，`link` 命令在 pstate_sessions_cli.py）；claim/take/transfer/link 共用同一登记函数，短锁在 PSTATE_HOME/session-links，不与认领锁、事项锁嵌套；不依赖 hub、不做自动推断。
 - 入口 scripts/pstate.py；事项、历史、内部后台分别位于 scripts/pstate_threads、scripts/pstate_history、scripts/pstate_sweep。历史平台与后台能力共用 pstate_history.PLATFORMS，新增平台只改适配器和注册项。

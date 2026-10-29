@@ -6,6 +6,11 @@ import re
 from .common import finish, message, text_blocks, object_value, parse_ts, clip, with_activity
 
 
+def locate(roots, sid):
+    for root in roots:
+        yield from sorted(root.glob("*/" + sid + ".jsonl"))
+
+
 def parse_all(files, warnings, counts):
     return parse(files, warnings, counts, include_excluded=True)
 

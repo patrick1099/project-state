@@ -5,6 +5,12 @@ import re
 from .common import finish, message, text_blocks, object_value, parse_ts, clip, with_activity
 
 
+def locate(roots, sid):
+    for root in roots:
+        for suffix in (".jsonl", ".jsonl.zst"):
+            yield from sorted(root.rglob("rollout-*-" + sid + suffix))
+
+
 def parse_all(files, warnings, counts):
     return parse(files, warnings, counts, include_excluded=True)
 

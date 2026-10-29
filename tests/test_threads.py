@@ -240,7 +240,10 @@ class CliTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name) / 'state'
-        self.env = {**os.environ, 'PSTATE_HOME': str(self.home), 'PYTHONDONTWRITEBYTECODE': '1'}
+        self.env = {**os.environ, 'PSTATE_HOME': str(self.home), 'PYTHONDONTWRITEBYTECODE': '1', 'USERPROFILE': self.tmp.name}
+        # 接手登记会按会话环境变量去家目录找日志；测试里不能碰到跑测试的真实会话。
+        for name in ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID'):
+            self.env.pop(name, None)
         self.base = [sys.executable, '-B', str(ROOT / 'scripts/pstate.py')]
 
     def run_cli(self, args, value=None, code=0, raw=None):
@@ -262,6 +265,7 @@ class CliTests(unittest.TestCase):
         resumed = self.run_cli(['choose', ident, 'continue', '--json'])
         self.assertFalse(resumed['committed'])
         self.assertEqual(resumed['item']['rev'], 1)
+        self.assertEqual(resumed['session_linked'], {'linked': False, 'reason': 'no_session_env'})
         for choice, expected in [('do', 'decided'), ('later', 'parked'), ('drop', 'dropped')]:
             item = self.run_cli(['choose', ident, choice, '--rev', str(item['rev']), '--json'], decision())['item']
             self.assertEqual(item['state'], expected)
@@ -425,6 +429,81 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.prompt_hook(''), '')
         self.run_cli(['done', item['id'], '--rev', '1', '--json'], {'evidence': ['已完成']})
         self.assertEqual(self.prompt_hook('session-1'), '')
+
+    def pickup_log(self, sid, text='继续做那件事', stamp='2026-10-23T00:00:00Z'):
+        directory = Path(self.tmp.name) / '.claude/projects/other'
+        directory.mkdir(parents=True, exist_ok=True)
+        log = directory / (sid + '.jsonl')
+        self.append_human(log, sid, 'pickup-1', text, stamp)
+        return log
+
+    def test_continue_registers_the_session_that_picks_the_card_up(self):
+        _, src = self.native_log('session-a')
+        item = self.run_cli(['add', '--json'], {'title': 'A 会话记下、B 会话接手', 'sources': [src]})['item']
+        log = self.pickup_log('session-b')
+        self.env['CLAUDE_CODE_SESSION_ID'] = 'session-b'
+        resumed = self.run_cli(['choose', item['id'], 'continue', '--json'])
+        self.assertTrue(resumed['committed'])
+        self.assertEqual(resumed['session_linked'], {'linked': True, 'reason': 'picked_up'})
+        self.assertEqual((resumed['item']['rev'], resumed['item']['state']), (2, 'open'))
+        added = resumed['item']['sources'][-1]
+        self.assertEqual((added['session'], added['excerpt']), ('session-b', '继续做那件事'))
+        self.assertEqual(resumed['item']['log'][-1]['action'], 'append_sources')
+        self.assertIn('A 会话记下、B 会话接手', self.prompt_hook('session-b'), '接手后 B 每轮也收到提醒')
+        again = self.run_cli(['choose', item['id'], 'continue', '--json'])
+        self.assertEqual(again['session_linked'], {'linked': False, 'reason': 'already_source'})
+        self.assertEqual((again['committed'], again['item']['rev']), (False, 2))
+        self.append_human(log, 'session-b', 'pickup-2', '做完了吗', datetime.now(timezone.utc).isoformat())
+        listed = self.run_cli(['list', '--json'])['items'][0]
+        self.assertTrue(listed['possibly_stale'], '回顾时也查 B 的日志')
+        self.assertEqual({f['session']: f['user_messages'] for f in listed['followups']}, {'session-a': 0, 'session-b': 1})
+
+    def test_pickup_never_blocks_continue_or_set(self):
+        ident = self.run_cli(['add', '--json'], payload(title='接手登记不影响命令本身'))['item']['id']
+        base = dict(self.env)
+        cases = [({}, 'no_session_env'),
+                 ({'CLAUDE_CODE_SESSION_ID': 'b', 'CODEX_THREAD_ID': 'c'}, 'ambiguous_session_env'),
+                 ({'CLAUDE_CODE_SESSION_ID': 'no-log'}, 'log_not_found')]
+        for extra, reason in cases:
+            self.env = {**base, **extra}
+            resumed = self.run_cli(['choose', ident, 'continue', '--json'])
+            self.assertEqual(resumed['session_linked'], {'linked': False, 'reason': reason})
+            self.assertEqual((resumed['committed'], resumed['item']['rev']), (False, 1))
+        self.env = {**base, 'CLAUDE_CODE_SESSION_ID': 'session-b'}
+        self.pickup_log('session-b')
+        preview = self.run_cli(['choose', ident, 'continue', '--dry-run', '--json'])
+        self.assertEqual((preview['session_linked']['linked'], preview['committed']), (True, False))
+        preview = self.run_cli(['set', ident, '--rev', '1', '--dry-run', '--json'], {'stopped_at': '预演'})
+        self.assertEqual((preview['item']['rev'], preview['item']['stopped_at'], preview['committed']), (3, '预演', False))
+        self.assertEqual(self.run_cli(['show', ident, '--json'])['item']['rev'], 1)
+        changed = self.run_cli(['set', ident, '--rev', '1', '--json'], {'stopped_at': 'B 会话接手推进'})
+        self.assertEqual(changed['session_linked'], {'linked': True, 'reason': 'picked_up'})
+        self.assertEqual((changed['item']['rev'], changed['item']['stopped_at']), (3, 'B 会话接手推进'))
+        self.assertIn('session-b', [s['session'] for s in changed['item']['sources']])
+        self.run_cli(['choose', ident, 'later', '--rev', '3', '--json'], decision())
+        self.env = {**base, 'CLAUDE_CODE_SESSION_ID': 'session-c'}
+        self.pickup_log('session-c')
+        parked = self.run_cli(['choose', ident, 'continue', '--json'])
+        self.assertEqual(parked['session_linked'], {'linked': False, 'reason': 'not_active'})
+        self.assertEqual((parked['item']['state'], parked['item']['rev']), ('parked', 4))
+
+    def test_codex_session_picks_up_from_rollout_log(self):
+        ident = self.run_cli(['add', '--json'], payload(title='Codex 接手'))['item']['id']
+        sid = '019a0000-0000-7000-8000-000000000001'
+        directory = Path(self.tmp.name) / '.codex/sessions/2026/10/29'
+        directory.mkdir(parents=True)
+        rows = [{'type': 'session_meta', 'timestamp': '2026-10-29T00:00:00Z',
+                 'payload': {'id': sid, 'source': 'cli', 'thread_source': 'user'}},
+                {'type': 'event_msg', 'timestamp': '2026-10-29T00:00:01Z',
+                 'payload': {'type': 'item_completed', 'item': {'type': 'UserMessage', 'id': 'u1',
+                                                                'content': [{'type': 'text', 'text': '接着做 Codex 那件事'}]}}}]
+        log = directory / f'rollout-2026-10-29T00-00-00-{sid}.jsonl'
+        log.write_text(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in rows), encoding='utf-8')
+        self.env['CODEX_THREAD_ID'] = sid
+        resumed = self.run_cli(['choose', ident, 'continue', '--json'])
+        self.assertTrue(resumed['session_linked']['linked'], resumed['session_linked'])
+        added = resumed['item']['sources'][-1]
+        self.assertEqual((added['platform'], added['session'], added['excerpt']), ('codex', sid, '接着做 Codex 那件事'))
 
     def test_parallel_writers_do_not_lose_items(self):
         processes = []
