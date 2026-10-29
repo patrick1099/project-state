@@ -32,11 +32,11 @@ def source_for(session, item, text=None):
     return {"platform": session["platform"], "session": session["session"], "anchor": item["anchor"], "time": item["time"], "role": item["role"], "excerpt": excerpt, "excerpt_hash": digest(excerpt), "path": item["path"]}
 
 
-def session_log(platform, session, options=None):
-    """Native log of one session by its ID; the current session is excluded from discover, so look it up here."""
+def session_logs(platform, session, options=None):
+    """Every native log of one session by its ID; the current session is excluded from discover, so look it up here."""
     if platform not in PLATFORMS or not re.fullmatch(r"[\w.-]+", session or ""):
-        return None
-    return next(PLATFORMS[platform]["locate"](roots_for(options or {}, platform), session), None)
+        return []
+    return list(PLATFORMS[platform]["locate"](roots_for(options or {}, platform), session))
 
 
 def enumerate_paths(roots, warnings, counts):

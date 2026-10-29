@@ -5,6 +5,8 @@ import json
 import re
 from .common import finish, message, text_blocks, object_value, parse_ts, clip, with_activity
 
+HUMAN_ENTRYPOINTS = {"cli", "claude-vscode", "claude-desktop"}
+
 
 def locate(roots, sid):
     for root in roots:
@@ -49,7 +51,7 @@ def parse(files, warnings, counts, include_excluded=False):
                 continue
             origin = object_value(row.get("origin"))
             entrypoint = row.get("entrypoint") or row.get("entryPoint") or origin.get("entrypoint")
-            native = origin.get("kind") == "human" and (entrypoint in ("cli", "claude-vscode") or bool(entrypoints.intersection({"cli", "claude-vscode"})))
+            native = origin.get("kind") == "human" and (entrypoint in HUMAN_ENTRYPOINTS or bool(entrypoints & HUMAN_ENTRYPOINTS))
             if role == "user":
                 if has_origin and not native:
                     continue

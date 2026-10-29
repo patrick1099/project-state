@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import store
 from .core import STATES, ThreadError, fields, get_item, statement
-from .followups import annotate
+from .followups import annotate, cached
 from .pickup import pick_up
 
 HELP = {
@@ -16,9 +16,9 @@ HELP = {
     'commands': {
         'add': 'title, sources required; optional motivation/confirmed/questions/stopped_at/next_suggestion/paths/handoff; --distinct or --into ID --rev N',
         'list': 'default open/decided; --all or --state parked; always includes counts; open/decided cards carry followups/possibly_stale',
-        'show': 'show ID, including sources, decision log, HANDOFF filesystem facts and source-session followups',
-        'set': 'set ID --rev N; structured editable fields only, cannot set state; also picks the card up for the current session (session_linked)',
-        'choose': 'choose ID continue|do|later|drop; continue takes only ID (and --dry-run), keeps the state and picks the card up for the current session (session_linked); others require --rev N, said/source JSON',
+        'show': 'show ID, including sources, decision log, HANDOFF filesystem facts and source-session followups with the latest follow-up message texts',
+        'set': 'set ID --rev N; structured editable fields only, cannot set state',
+        'choose': 'choose ID continue|do|later|drop; continue takes only ID (and --dry-run), keeps the state, picks the card up for the current session (session_linked) and returns followups; others require --rev N, said/source JSON',
         'done': 'done ID --rev N; evidence (nonempty string list); optional said/source, otherwise actor=assistant',
         'reopen': 'reopen ID --rev N; said/source; explicit reopening of parked/dropped/done/transferred (clears transferred_to)',
         'transfer': 'transfer ID --rev N; JSON to (existing task directory .../task/Tnn-name) + evidence list; from verified decided, or replay transferred to the same task to repair session links',
@@ -59,13 +59,13 @@ Complex fields use --input-file PATH or --input-file - (stdin); omitted input re
 set requires --rev; choices other than continue require --rev and said/source. done requires --rev and evidence, with optional said/source.
 next_suggestion is text and is stored with an AI marker. confirmed is a list of {said, source}; each quotation is verified against its original message when available.
 paths, handoff and questions are lists of strings. title/motivation/stopped_at are text.
-list/show add last_touched (time of the latest log event) and, for open/decided cards, followups: per source session, native user messages newer than last_touched. possibly_stale=true means the source session kept going after the card was written: read those messages, then done (with evidence) or set the card yourself and tell the user.
-Pick-up: choose continue and set append the current session's latest native user message as a source when the card is open/decided and this session is not yet a source; identity comes from exactly one of CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID. session_linked {linked, reason} reports it (reasons: picked_up, already_source, not_active, no_session_env, ambiguous_session_env, log_not_found, no_native_user_message, failed: ...). A failed pick-up never fails the command. Once linked, this session gets the per-turn card reminder and its log is checked for followups.
+list/show/continue add last_touched (time of the latest content event; a pick-up registration does not count) and, for open/decided cards, followups: per source session, user messages (Codex legacy format included) newer than both last_touched and that session's latest source on the card. show also attaches the latest follow-up texts (messages, each clipped). possibly_stale=true means the source session kept going after the card was written: read those messages, then done (with evidence) or set the card yourself and tell the user.
+Pick-up: choose continue appends the current session's latest user message (Codex legacy format included; the source records who works on the card, it confirms nothing) as a source when the card is open/decided and this session is not yet a source; identity comes from exactly one of CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID. set never picks up. session_linked {linked, reason} reports it (reasons: picked_up, already_source, not_active, no_session_env, ambiguous_session_env, log_not_found, no_user_message, failed: ...). A failed pick-up never fails the command; with commit_status replaced_unverified, linked and committed are null: show the card before retrying. Once linked, this session gets the per-turn card reminder and its log is checked for followups. If the message that picks a card up also raises a new matter, add that matter with --distinct.
 All business commands support --json or --format json. list defaults to open/decided; --state or --all changes visibility.
 --ai-help and --help print documentation, not business JSON envelopes, including when --json is present.
 
 ## Side Effects & Safety
-add/set/choose/done/reopen/seen update the global threads database under PSTATE_HOME; choose continue writes only the pick-up source and rev.
+add/set/choose/done/reopen/seen update the global threads database under PSTATE_HOME; choose continue writes only the pick-up source, rev and an append_sources log event (via=pickup).
 All those mutations support --dry-run through the same transaction path; only a coordination lock directory/file may be created, never business state.
 list/show read state; show/continue inspect HANDOFF metadata without executing or changing its contents.
 discover reads requested local history and optional session-sweep state; it does not call a model, write history or automatically mark seen.
@@ -159,6 +159,11 @@ def history():
         raise ThreadError('history adapter unavailable: ' + str(exc), 'E_PLATFORM', 1) from exc
 
 
+def log_readers():
+    adapters = history()
+    return cached(adapters.load_sessions), cached(adapters.session_logs)
+
+
 def verify(payload):
     _, src = statement(payload)
     try:
@@ -174,19 +179,19 @@ def dispatch(args, directory):
     command = args.command
     if command in ('list', 'show'):
         state = store.read(directory)
-        load = history().load_sessions
+        readers = log_readers()
         if command == 'show':
-            return {'item': annotate(store.card(get_item(state, args.id)), load)}
+            return {'item': annotate(store.card(get_item(state, args.id)), *readers, with_text=True)}
         wanted = STATES if args.all else ((args.state,) if args.state else ('open', 'decided'))
-        return {'items': [annotate(store.card(item), load) for item in state['items'].values() if item['state'] in wanted],
+        return {'items': [annotate(store.card(item), *readers) for item in state['items'].values() if item['state'] in wanted],
                 'counts': store.counts(state)}
     if command == 'choose' and args.choice == 'continue':
         if args.input_file or args.rev is not None:
             raise ThreadError('continue accepts only the thread ID and --dry-run')
         item = get_item(store.read(directory), args.id)
         linked, updated, committed = pick_up(directory, item, history, args.dry_run)
-        return {'item': store.card(updated or item), 'action': 'continue', 'committed': committed,
-                'dry_run': args.dry_run, 'session_linked': linked}
+        return {'item': annotate(store.card(updated or item), *log_readers()), 'action': 'continue',
+                'committed': committed, 'dry_run': args.dry_run, 'session_linked': linked}
     payload = read_input(args.input_file, optional=command == 'discover')
     if command == 'discover':
         if 'seen' in payload:
@@ -207,14 +212,9 @@ def dispatch(args, directory):
     if op in ('add', 'set') and 'confirmed' in payload:
         quotations = fields({'confirmed': payload['confirmed']})['confirmed']
         verification = {'confirmed_entries': [verify(entry) for entry in quotations]}
-    preview = store.read(directory) if op == 'set' and args.dry_run else None
     result = store.mutate(directory, op, payload, ident=getattr(args, 'id', None), rev=getattr(args, 'rev', None),
                           into=getattr(args, 'into', None), distinct=getattr(args, 'distinct', False),
-                          verified=verification, dry_run=args.dry_run, preview_state=preview)
-    if op == 'set':
-        result['session_linked'], updated, committed = pick_up(directory, result['item'], history, args.dry_run, preview)
-        if updated:
-            result['item'], result['committed'] = updated, result['committed'] or committed
+                          verified=verification, dry_run=args.dry_run)
     if op == 'transfer':
         from pstate_sessions import link_transfer
         result['transfer_succeeded'] = not args.dry_run

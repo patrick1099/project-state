@@ -237,6 +237,12 @@ def pickup(item, payload, now):
     return {'id': item['id'], 'linked': True, 'reason': 'picked_up'}
 
 
+def last_touched(item):
+    """Latest content event; a pick-up only registers a source, so it never moves the baseline."""
+    touched = [event['at'] for event in item['log'] if event.get('via') != 'pickup']
+    return touched[-1] if touched else ''
+
+
 def last_decision(item):
     return next((e for e in reversed(item['log']) if e.get('action') in DECISIONS), None)
 

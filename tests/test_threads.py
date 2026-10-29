@@ -1,8 +1,10 @@
 """Thread storage and CLI contracts exercised against temporary state only."""
 import copy
 import hashlib
+import io
 import json
 import os
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import subprocess
 import sys
@@ -240,7 +242,8 @@ class CliTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name) / 'state'
-        self.env = {**os.environ, 'PSTATE_HOME': str(self.home), 'PYTHONDONTWRITEBYTECODE': '1', 'USERPROFILE': self.tmp.name}
+        self.env = {**os.environ, 'PSTATE_HOME': str(self.home), 'PYTHONDONTWRITEBYTECODE': '1',
+                    'USERPROFILE': self.tmp.name, 'HOME': self.tmp.name}
         # 接手登记会按会话环境变量去家目录找日志；测试里不能碰到跑测试的真实会话。
         for name in ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID'):
             self.env.pop(name, None)
@@ -390,10 +393,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(listed['followups'][0]['user_messages'], 0)
         later = datetime.now(timezone.utc).isoformat()
         self.append_human(log, 'native-session', 'user-2', '那就1，2', later)
-        for shown in (self.run_cli(['list', '--json'])['items'][0], self.run_cli(['show', item['id'], '--json'])['item']):
-            self.assertTrue(shown['possibly_stale'])
-            self.assertEqual(shown['followups'][0]['user_messages'], 1)
-            self.assertEqual(shown['followups'][0]['last_time'], later)
+        listed, shown = self.run_cli(['list', '--json'])['items'][0], self.run_cli(['show', item['id'], '--json'])['item']
+        for card in (listed, shown):
+            self.assertTrue(card['possibly_stale'])
+            self.assertEqual(card['followups'][0]['user_messages'], 1)
+            self.assertEqual(card['followups'][0]['last_time'], later)
+        self.assertEqual(shown['followups'][0]['messages'], [{'time': later, 'text': '那就1，2'}], 'show 直接附后续正文')
+        self.assertNotIn('messages', listed['followups'][0], 'list 不附正文')
         item = self.run_cli(['set', item['id'], '--rev', '1', '--json'], {'stopped_at': '已按 1、2 改完'})['item']
         self.assertFalse(self.run_cli(['list', '--json'])['items'][0]['possibly_stale'], '卡片更新后不再提示')
         self.append_human(log, 'native-session', 'user-3', '再补一句', '2099-01-01T00:00:00Z')
@@ -403,8 +409,9 @@ class CliTests(unittest.TestCase):
         self.assertFalse(closed['possibly_stale'])
 
     def test_missing_source_log_is_not_called_stale(self):
-        _, src = self.native_log()
-        self.run_cli(['add', '--json'], {'title': '日志已删', 'sources': [{**src, 'path': src['path'] + '.gone'}]})
+        log, src = self.native_log()
+        self.run_cli(['add', '--json'], {'title': '日志已删', 'sources': [src]})
+        log.unlink()
         shown = self.run_cli(['list', '--json'])['items'][0]
         self.assertFalse(shown['possibly_stale'])
         self.assertFalse(shown['followups'][0]['readable'])
@@ -458,7 +465,147 @@ class CliTests(unittest.TestCase):
         self.assertTrue(listed['possibly_stale'], '回顾时也查 B 的日志')
         self.assertEqual({f['session']: f['user_messages'] for f in listed['followups']}, {'session-a': 0, 'session-b': 1})
 
-    def test_pickup_never_blocks_continue_or_set(self):
+    def test_pickup_keeps_other_sources_followups(self):
+        log_a, src = self.native_log('session-a')
+        item = self.run_cli(['add', '--json'], {'title': 'A 记下、B 接手后 A 的后续不能丢', 'sources': [src]})['item']
+        self.backdate(item['id'], '2026-10-24T00:00:00+00:00')
+        self.append_human(log_a, 'session-a', 'user-2', 'A 会话里又推进了', '2026-10-25T00:00:00Z')
+        self.pickup_log('session-b', stamp='2026-10-26T00:00:00Z')
+        self.env['CLAUDE_CODE_SESSION_ID'] = 'session-b'
+        resumed = self.run_cli(['choose', item['id'], 'continue', '--json'])
+        self.assertTrue(resumed['session_linked']['linked'], resumed['session_linked'])
+        for card in (resumed['item'], self.run_cli(['list', '--json'])['items'][0]):
+            self.assertTrue(card['possibly_stale'], '接手登记不能把 A 的后续清掉')
+            self.assertTrue(card['last_touched'].startswith('2026-10-24'), '登记不算卡片内容更新')
+            self.assertEqual({f['session']: f['user_messages'] for f in card['followups']}, {'session-a': 1, 'session-b': 0},
+                             'B 接手那句本身不算后续')
+        self.assertIn('卡片最后更新 2026-10-24T00:00', self.prompt_hook('session-b'))
+
+    def backdate(self, ident, stamp):
+        path = self.home / 'threads/threads.json'
+        state = json.loads(path.read_text(encoding='utf-8'))
+        state['items'][ident]['log'][0]['at'] = stamp
+        path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+    def codex_legacy_log(self, sid, text='接着做 Codex 那件事', stamp='2026-10-22T00:00:00Z'):
+        directory = Path(self.tmp.name) / '.codex/sessions/2026/10/22'
+        directory.mkdir(parents=True, exist_ok=True)
+        log = directory / f'rollout-2026-10-22T00-00-00-{sid}.jsonl'
+        rows = [{'type': 'session_meta', 'timestamp': stamp, 'payload': {'id': sid, 'source': 'vscode'}}]
+        log.write_text(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in rows), encoding='utf-8')
+        self.append_codex_legacy(log, text, stamp)
+        return log
+
+    def append_codex_legacy(self, log, text, stamp):
+        row = {'type': 'event_msg', 'timestamp': stamp, 'payload': {'type': 'user_message', 'message': text}}
+        with log.open('a', encoding='utf-8') as stream:
+            stream.write(json.dumps(row, ensure_ascii=False) + '\n')
+
+    def test_codex_legacy_and_desktop_sessions_pick_up(self):
+        ident = self.run_cli(['add', '--json'], payload(title='旧格式和桌面版也能接手'))['item']['id']
+        sid = '019a0000-0000-7000-8000-000000000002'
+        self.codex_legacy_log(sid)
+        self.env['CODEX_THREAD_ID'] = sid
+        resumed = self.run_cli(['choose', ident, 'continue', '--json'])
+        self.assertTrue(resumed['session_linked']['linked'], resumed['session_linked'])
+        added = resumed['item']['sources'][-1]
+        self.assertEqual((added['platform'], added['session'], added['excerpt']), ('codex', sid, '接着做 Codex 那件事'))
+        self.env.pop('CODEX_THREAD_ID')
+        directory = Path(self.tmp.name) / '.claude/projects/desktop'
+        directory.mkdir(parents=True)
+        row = {'sessionId': 'desktop-session', 'uuid': 'd1', 'type': 'user', 'timestamp': '2026-10-23T00:00:00Z',
+               'origin': {'kind': 'human'}, 'entrypoint': 'claude-desktop', 'message': {'role': 'user', 'content': '桌面版接着做'}}
+        (directory / 'desktop-session.jsonl').write_text(json.dumps(row, ensure_ascii=False) + '\n', encoding='utf-8')
+        self.env['CLAUDE_CODE_SESSION_ID'] = 'desktop-session'
+        resumed = self.run_cli(['choose', ident, 'continue', '--json'])
+        self.assertTrue(resumed['session_linked']['linked'], resumed['session_linked'])
+        self.assertEqual(resumed['item']['sources'][-1]['excerpt'], '桌面版接着做')
+
+    def run_inprocess(self, args):
+        from pstate_threads import cli
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = cli.main(args, str(self.home))
+        return code, json.loads(out.getvalue())['data'] if code == 0 else err.getvalue()
+
+    def test_one_list_parses_a_shared_log_once(self):
+        import pstate_history
+        log, src = self.native_log()
+        for i in range(3):
+            self.run_cli(['add', '--distinct', '--json'], {'title': f'同一会话的第 {i} 张卡', 'sources': [src]})
+        self.append_human(log, 'native-session', 'user-2', '接着聊', datetime.now(timezone.utc).isoformat())
+        with patch.object(pstate_history, 'load_sessions', wraps=pstate_history.load_sessions) as load:
+            code, data = self.run_inprocess(['list', '--json'])
+        self.assertEqual(code, 0, data)
+        self.assertTrue(all(card['possibly_stale'] for card in data['items']))
+        self.assertEqual(load.call_count, 1, '三张卡共用一个日志，一次 list 只解析一次')
+
+    def test_vanishing_log_does_not_fail_list(self):
+        log, src = self.native_log()
+        self.run_cli(['add', '--json'], {'title': '检查时日志被删', 'sources': [src]})
+        self.run_cli(['add', '--json'], payload(title='别的卡照常列出'))
+        real_stat = Path.stat
+        def vanished(path, *args, **kwargs):
+            if str(path).endswith('.jsonl'):
+                raise FileNotFoundError(str(path))
+            return real_stat(path, *args, **kwargs)
+        with patch.object(Path, 'stat', vanished):
+            code, data = self.run_inprocess(['list', '--json'])
+        self.assertEqual(code, 0, data)
+        self.assertEqual(len(data['items']), 2)
+        card = next(c for c in data['items'] if c['title'] == '检查时日志被删')
+        self.assertEqual((card['followups'][0]['readable'], card['possibly_stale']), (False, False))
+
+    def test_followups_read_zst_and_archived_logs(self):
+        from compression import zstd
+        log, src = self.native_log('zst-session')
+        self.run_cli(['add', '--json'], {'title': '日志被压缩', 'sources': [src]})
+        self.append_human(log, 'zst-session', 'user-2', '压缩前的后续', datetime.now(timezone.utc).isoformat())
+        packed = Path(str(log) + '.zst')
+        packed.write_bytes(zstd.compress(log.read_bytes()))
+        log.unlink()
+        sid = '019a0000-0000-7000-8000-000000000003'
+        rollout = self.codex_legacy_log(sid, '记一下 Codex 这件事')
+        options = {'files': {'codex': [str(rollout)]}, 'roots': {}}
+        codex_src = self.run_cli(['discover', '--input-file', '-', '--json'], options)['sessions'][0]['sources'][0]
+        self.run_cli(['add', '--json'], {'title': 'Codex 日志被归档', 'sources': [codex_src]})
+        self.append_codex_legacy(rollout, '归档前的后续', datetime.now(timezone.utc).isoformat())
+        archived = Path(self.tmp.name) / '.codex/archived_sessions' / rollout.name
+        archived.parent.mkdir(parents=True)
+        rollout.replace(archived)
+        cards = {c['title']: c['followups'][0] for c in self.run_cli(['list', '--json'])['items']}
+        for title, path in (('日志被压缩', packed), ('Codex 日志被归档', archived)):
+            entry = cards[title]
+            self.assertEqual((entry['readable'], entry['user_messages']), (True, 1), entry)
+            self.assertEqual(Path(entry['path']).resolve(), path.resolve(), '回执报实际读到的文件')
+
+    def test_unverified_pickup_commit_is_not_reported_as_unwritten(self):
+        import pstate_history.core
+        ident = self.run_cli(['add', '--json'], payload(title='回读失败'))['item']['id']
+        self.pickup_log('session-b')
+        failure = ThreadError('database was replaced; commit verification failed', 'E_IO', 1,
+                              {'commit_status': 'replaced_unverified'})
+        roots = {'claude': (Path(self.tmp.name) / '.claude/projects',), 'codex': ()}
+        with patch.dict(os.environ, {'CLAUDE_CODE_SESSION_ID': 'session-b'}), \
+                patch.dict(pstate_history.core.DEFAULT_ROOTS, roots), patch.object(store, 'mutate', side_effect=failure):
+            os.environ.pop('CODEX_THREAD_ID', None)
+            code, data = self.run_inprocess(['choose', ident, 'continue', '--json'])
+        self.assertEqual(code, 0, data)
+        linked = data['session_linked']
+        self.assertEqual((linked['linked'], linked['commit_status'], data['committed']), (None, 'replaced_unverified', None),
+                         '库可能已写入，不能报未提交')
+
+    def test_prompt_hook_caps_long_reminders(self):
+        for i in range(15):
+            self.run_cli(['add', '--json'], payload(title=f'很长的卡片标题 {i} ' + '长' * 300,
+                                                    sources=[source(anchor=f'message-{i}')]))
+        context = self.prompt_hook('session-1')
+        self.assertLessEqual(len(context), 4000)
+        self.assertIn('另有', context)
+        self.assertIn('thread list', context)
+        self.assertIn('thread done', context)
+
+    def test_pickup_never_blocks_continue_and_set_never_picks_up(self):
         ident = self.run_cli(['add', '--json'], payload(title='接手登记不影响命令本身'))['item']['id']
         base = dict(self.env)
         cases = [({}, 'no_session_env'),
@@ -474,18 +621,18 @@ class CliTests(unittest.TestCase):
         preview = self.run_cli(['choose', ident, 'continue', '--dry-run', '--json'])
         self.assertEqual((preview['session_linked']['linked'], preview['committed']), (True, False))
         preview = self.run_cli(['set', ident, '--rev', '1', '--dry-run', '--json'], {'stopped_at': '预演'})
-        self.assertEqual((preview['item']['rev'], preview['item']['stopped_at'], preview['committed']), (3, '预演', False))
+        self.assertEqual((preview['item']['rev'], preview['item']['stopped_at'], preview['committed']), (2, '预演', False))
         self.assertEqual(self.run_cli(['show', ident, '--json'])['item']['rev'], 1)
-        changed = self.run_cli(['set', ident, '--rev', '1', '--json'], {'stopped_at': 'B 会话接手推进'})
-        self.assertEqual(changed['session_linked'], {'linked': True, 'reason': 'picked_up'})
-        self.assertEqual((changed['item']['rev'], changed['item']['stopped_at']), (3, 'B 会话接手推进'))
-        self.assertIn('session-b', [s['session'] for s in changed['item']['sources']])
-        self.run_cli(['choose', ident, 'later', '--rev', '3', '--json'], decision())
+        changed = self.run_cli(['set', ident, '--rev', '1', '--json'], {'stopped_at': '改卡不登记'})
+        self.assertNotIn('session_linked', changed)
+        self.assertEqual((changed['item']['rev'], changed['item']['stopped_at']), (2, '改卡不登记'))
+        self.assertNotIn('session-b', [s['session'] for s in changed['item']['sources']], 'set 不把本会话登记为来源')
+        self.run_cli(['choose', ident, 'later', '--rev', '2', '--json'], decision())
         self.env = {**base, 'CLAUDE_CODE_SESSION_ID': 'session-c'}
         self.pickup_log('session-c')
         parked = self.run_cli(['choose', ident, 'continue', '--json'])
         self.assertEqual(parked['session_linked'], {'linked': False, 'reason': 'not_active'})
-        self.assertEqual((parked['item']['state'], parked['item']['rev']), ('parked', 4))
+        self.assertEqual((parked['item']['state'], parked['item']['rev']), ('parked', 3))
 
     def test_codex_session_picks_up_from_rollout_log(self):
         ident = self.run_cli(['add', '--json'], payload(title='Codex 接手'))['item']['id']

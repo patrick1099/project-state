@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pstate_lock
-from .core import STATES, ThreadError, evolve, get_item, validate_state
+from .core import STATES, ThreadError, evolve, get_item, last_touched, validate_state
 
 
 def path_exists(path):
@@ -133,18 +133,27 @@ def hook_hint(home, cmd):
             f"需要回顾时运行：{cmd} thread list；不自动扫描历史。")
 
 
-def session_reminder(home, session, cmd):
-    """Cards whose sources include this session, so the AI updates them as the work moves on."""
+def session_reminder(home, session, cmd, limit=None):
+    """Cards whose sources include this session, so the AI updates them as the work moves on; at most limit chars."""
     if not session:
         return ''
     mine = [item for item in read(Path(home) / 'threads')['items'].values()
             if item['state'] in ('open', 'decided') and any(s['session'] == session for s in item['sources'])]
     if not mine:
         return ''
-    lines = ['[pstate 卡片] 本会话是下列待续卡片的来源：']
-    lines += [f"- {item['title']}（{item['id']}，rev {item['rev']}，{item['state']}，"
-              f"卡片最后更新 {item['log'][-1]['at'][:16]} UTC）" for item in mine]
-    lines.append(f"这轮做完后对照卡片自己判断，不用等用户开口：已做完 → {cmd} thread done <ID> --rev <N>"
-                 "（evidence 写实际提交、产物和验证范围）；有实质进展或结论变了 → thread set 更新 "
-                 "stopped_at / next_suggestion / questions；这轮没碰它就不用动。改了卡片就在回复里告诉用户改了什么。")
-    return '\n'.join(lines)
+    head = '[pstate 卡片] 本会话是下列待续卡片的来源：'
+    advice = (f"这轮做完后对照卡片自己判断，不用等用户开口：已做完 → {cmd} thread done <ID> --rev <N>"
+              "（evidence 写实际提交、产物和验证范围）；有实质进展或结论变了 → thread set 更新 "
+              "stopped_at / next_suggestion / questions；这轮没碰它就不用动。改了卡片就在回复里告诉用户改了什么。")
+    def more(hidden):
+        return f'另有 {hidden} 张，{cmd} thread list 查看。'
+    budget = limit - len(head) - len(advice) - len(more(len(mine))) - 3 if limit else None
+    shown = []
+    for item in mine:
+        line = (f"- {item['title']}（{item['id']}，rev {item['rev']}，{item['state']}，"
+                f"卡片最后更新 {last_touched(item)[:16]} UTC）")
+        if budget is not None and sum(len(x) + 1 for x in shown) + len(line) + 1 > budget:
+            break
+        shown.append(line)
+    hidden = len(mine) - len(shown)
+    return '\n'.join([head, *shown, *([more(hidden)] if hidden else []), advice])

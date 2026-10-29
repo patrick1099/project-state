@@ -515,7 +515,7 @@ def cmd_hook_prompt(args):
     """UserPromptSubmit：本会话记过的待续卡，每轮提醒 AI 做完就 done、有进展就 set。"""
     from pstate_threads.store import session_reminder
     data = read_hook_input()
-    text = session_reminder(state_home(), data.get("session_id") or "", thread_cmd())
+    text = session_reminder(state_home(), data.get("session_id") or "", thread_cmd(), MAX_INJECT)
     if text:
         emit(data.get("hook_event_name") or "UserPromptSubmit", additionalContext=text)
     return 0

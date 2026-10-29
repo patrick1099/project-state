@@ -1,5 +1,25 @@
 # project-state 变更记录
 
+## 2026-10-29 0.8.1：双审查修复——接手登记不再清掉别的来源的后续，Codex 旧格式也能登记
+
+**起因**：0.7.0、0.8.0 两版发布后，请 GPT-6 Astra（经 Codex）和 Opus 5.5（经无头 Claude）各自只读审查。两家都报：接手登记会把 A 会话已有的后续清掉，一次 list 会把同一个日志解析很多遍。Opus 另报：Codex 交互会话基本登记不上。本机核实最近能解析的 3 个 Codex 日志里 2 个是旧格式，原生用户消息 0 条。用户逐条确认全部修，并定下“只在 continue 时登记”“接受 Codex 旧格式”。
+**改成**：
+- 卡片“最后更新”只认内容事件，接手登记（log 里 via=pickup）不算。每个来源会话的后续基线取它与该会话在卡片来源里最晚一条时间中较晚的那个，所以接手那句本身不算后续，A 的后续照旧标出。每轮提醒里的“卡片最后更新”用同一口径。continue 回执也带 last_touched/followups/possibly_stale。
+- 接手登记取本会话最后一条用户消息（按时间解析后取最晚），含 Codex 旧格式日志里的用户消息；reason `no_native_user_message` 改名 `no_user_message`。followups 同一口径，代码共用一个判定函数。Claude 原生人类入口加上 `claude-desktop`（本机 Desktop 日志实测 entrypoint=claude-desktop、origin.kind=human），这也让 Desktop 会话进入 discover、可核验原话、能登记。
+- `thread set` 不再登记，回执去掉 session_linked，也去掉了为它串联的预演状态。
+- 一次 list/show/continue 内，同一组日志只解析一次，按会话号找日志的结果也只查一次。
+- followups 的 path 报实际读到的文件（如 `.jsonl.zst`）；记录的路径和它的 .zst 都不在时按会话号再找一次（Codex 归档会把日志挪到 archived_sessions）；单个来源检查时日志消失记不可读，不让整个 list 失败。
+- 接手写入后读回失败（replaced_unverified）时，session_linked 带 commit_status，linked 与 committed 都报 null，不再报成“未提交”。
+- 每轮提醒总长按 MAX_INJECT（4000 字）截断，超出的卡写“另有 N 张，thread list 查看”。
+- `thread show` 的 followups 附最近 5 条后续消息正文（每条截断到 400 字、脱敏），list 不附。skill 改成回顾时读 show 里的正文：discover 会跳过已 seen 的会话，也排除当前会话，按旧说法读不到。
+- skill 写明：接手那句话里另提的新事要用 `add --distinct` 记，别照 same anchor 的提示并进去。
+- 按会话号找日志改为返回同会话全部文件（`session_log` → `session_logs`），followups 每个来源会话保留全部路径。测试同时设 HOME，免得 POSIX 上碰到真实家目录。
+**没选的路**：
+- set 也登记（0.8.0 的做法）：回顾会话顺手改卡后会被拉成来源，之后它聊别的事就让卡片反复标过期、每轮注入无关提醒，噪音天天发生；收益只是覆盖“改完卡又接着干却忘了再改”这一小类，和“没走 continue 直接干”是同一个漏洞，靠汇报前核实物兜底。
+- 登记只认原生用户消息：登记的来源只说明谁在干这件事，不当用户确认用（核验原话仍只认原生）；只认原生时 Codex 上基本登记不上。
+- 给接手来源加标记、让 add 不撞锚点：要改 schema，用 skill 里的 `--distinct` 说明就够。
+**影响**：两平台 manifest 升到 0.8.1。set 回执不再有 session_linked；continue 回执多 last_touched/followups/possibly_stale，读回失败时 committed 可能是 null；reason 名改为 no_user_message。Desktop 会话从此出现在 discover 里，其用户消息也进入正文。`pstate_history.session_log` 改名 `session_logs` 并返回列表（仓内调用方已改）。schema 未变。zst 历史仍要 Python 3.14，是 0.6.0 起的既有依赖。
+
 ## 2026-10-29 0.8.0：接手登记——继续聊或改卡的会话自动成为卡片来源
 
 **起因**：0.7.0 的每轮提醒和 possibly_stale 只认卡片来源里的会话。卡在 A 会话记下、活在 B 会话干时，B 不在来源里，两样都看不到 B，卡片照样停在旧停点。用户提出：“会话b去看pstate的时候可以先核对自己的会话id和已经记录的会话id吧……总有认领这个过程吧”。
