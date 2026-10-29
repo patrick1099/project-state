@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -359,6 +360,71 @@ class CliTests(unittest.TestCase):
         context = json.loads(result.stdout)['hookSpecificOutput']['additionalContext']
         self.assertIn('thread list', context)
         self.assertNotIn('do not inject this title', context)
+
+    def native_log(self, sid='native-session'):
+        self.env.pop('CLAUDE_CODE_SESSION_ID', None)
+        self.env.pop('CODEX_THREAD_ID', None)
+        directory = Path(self.tmp.name) / '.claude/projects/fixture'
+        directory.mkdir(parents=True, exist_ok=True)
+        log = directory / (sid + '.jsonl')
+        self.append_human(log, sid, 'user-1', '这件事记一下', '2026-10-22T00:00:00Z')
+        options = {'files': {'claude': [str(log)]}, 'roots': {}}
+        src = self.run_cli(['discover', '--input-file', '-', '--json'], options)['sessions'][0]['sources'][0]
+        return log, src
+
+    def append_human(self, log, sid, uuid, text, stamp):
+        row = {'sessionId': sid, 'uuid': uuid, 'type': 'user', 'timestamp': stamp,
+               'origin': {'kind': 'human'}, 'entrypoint': 'cli', 'message': {'role': 'user', 'content': text}}
+        with log.open('a', encoding='utf-8') as stream:
+            stream.write(json.dumps(row, ensure_ascii=False) + '\n')
+
+    def test_list_flags_source_session_that_kept_going(self):
+        log, src = self.native_log()
+        item = self.run_cli(['add', '--json'], {'title': '来源会话后来接着干', 'sources': [src]})['item']
+        listed = self.run_cli(['list', '--json'])['items'][0]
+        self.assertFalse(listed['possibly_stale'])
+        self.assertEqual(listed['followups'][0]['user_messages'], 0)
+        later = datetime.now(timezone.utc).isoformat()
+        self.append_human(log, 'native-session', 'user-2', '那就1，2', later)
+        for shown in (self.run_cli(['list', '--json'])['items'][0], self.run_cli(['show', item['id'], '--json'])['item']):
+            self.assertTrue(shown['possibly_stale'])
+            self.assertEqual(shown['followups'][0]['user_messages'], 1)
+            self.assertEqual(shown['followups'][0]['last_time'], later)
+        item = self.run_cli(['set', item['id'], '--rev', '1', '--json'], {'stopped_at': '已按 1、2 改完'})['item']
+        self.assertFalse(self.run_cli(['list', '--json'])['items'][0]['possibly_stale'], '卡片更新后不再提示')
+        self.append_human(log, 'native-session', 'user-3', '再补一句', '2099-01-01T00:00:00Z')
+        self.run_cli(['done', item['id'], '--rev', '2', '--json'], {'evidence': ['配置已写入并实测']})
+        closed = self.run_cli(['list', '--all', '--json'])['items'][0]
+        self.assertEqual(closed['followups'], [], '已关闭的卡不再追查来源')
+        self.assertFalse(closed['possibly_stale'])
+
+    def test_missing_source_log_is_not_called_stale(self):
+        _, src = self.native_log()
+        self.run_cli(['add', '--json'], {'title': '日志已删', 'sources': [{**src, 'path': src['path'] + '.gone'}]})
+        shown = self.run_cli(['list', '--json'])['items'][0]
+        self.assertFalse(shown['possibly_stale'])
+        self.assertFalse(shown['followups'][0]['readable'])
+
+    def prompt_hook(self, sid):
+        result = subprocess.run([*self.base, 'hook-prompt'], input=json.dumps({'cwd': self.tmp.name, 'session_id': sid,
+                                                                               'hook_event_name': 'UserPromptSubmit'}),
+                                capture_output=True, text=True, encoding='utf-8', env=self.env, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)['hookSpecificOutput']['additionalContext'] if result.stdout else ''
+
+    def test_prompt_hook_reminds_only_the_source_session(self):
+        item = self.run_cli(['add', '--json'], payload(title='本会话记下的卡'))['item']
+        self.run_cli(['add', '--json'], payload(title='别的会话的卡', sources=[source(session='other')]))
+        context = self.prompt_hook('session-1')
+        self.assertIn('本会话记下的卡', context)
+        self.assertIn(item['id'], context)
+        self.assertIn('thread done', context)
+        self.assertIn('thread set', context)
+        self.assertNotIn('别的会话的卡', context)
+        self.assertEqual(self.prompt_hook('unrelated'), '')
+        self.assertEqual(self.prompt_hook(''), '')
+        self.run_cli(['done', item['id'], '--rev', '1', '--json'], {'evidence': ['已完成']})
+        self.assertEqual(self.prompt_hook('session-1'), '')
 
     def test_parallel_writers_do_not_lose_items(self):
         processes = []

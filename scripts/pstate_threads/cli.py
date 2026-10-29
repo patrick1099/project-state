@@ -8,13 +8,14 @@ from pathlib import Path
 
 from . import store
 from .core import STATES, ThreadError, fields, get_item, statement
+from .followups import annotate
 
 HELP = {
     'command': 'pstate thread', 'input': 'UTF-8 JSON --input-file PATH or --input-file - (stdin)',
     'commands': {
         'add': 'title, sources required; optional motivation/confirmed/questions/stopped_at/next_suggestion/paths/handoff; --distinct or --into ID --rev N',
-        'list': 'default open/decided; --all or --state parked; always includes counts',
-        'show': 'show ID, including sources, decision log and HANDOFF filesystem facts',
+        'list': 'default open/decided; --all or --state parked; always includes counts; open/decided cards carry followups/possibly_stale',
+        'show': 'show ID, including sources, decision log, HANDOFF filesystem facts and source-session followups',
         'set': 'set ID --rev N; structured editable fields only, cannot set state',
         'choose': 'choose ID continue|do|later|drop; continue read-only; others require --rev N, said/source JSON',
         'done': 'done ID --rev N; evidence (nonempty string list); optional said/source, otherwise actor=assistant',
@@ -57,6 +58,7 @@ Complex fields use --input-file PATH or --input-file - (stdin); omitted input re
 set requires --rev; choices other than continue require --rev and said/source. done requires --rev and evidence, with optional said/source.
 next_suggestion is text and is stored with an AI marker. confirmed is a list of {said, source}; each quotation is verified against its original message when available.
 paths, handoff and questions are lists of strings. title/motivation/stopped_at are text.
+list/show add last_touched (time of the latest log event) and, for open/decided cards, followups: per source session, native user messages newer than last_touched. possibly_stale=true means the source session kept going after the card was written: read those messages, then done (with evidence) or set the card yourself and tell the user.
 All business commands support --json or --format json. list defaults to open/decided; --state or --all changes visibility.
 --ai-help and --help print documentation, not business JSON envelopes, including when --json is present.
 
@@ -170,10 +172,11 @@ def dispatch(args, directory):
     command = args.command
     if command in ('list', 'show'):
         state = store.read(directory)
+        load = history().load_sessions
         if command == 'show':
-            return {'item': store.card(get_item(state, args.id))}
+            return {'item': annotate(store.card(get_item(state, args.id)), load)}
         wanted = STATES if args.all else ((args.state,) if args.state else ('open', 'decided'))
-        return {'items': [store.card(item) for item in state['items'].values() if item['state'] in wanted],
+        return {'items': [annotate(store.card(item), load) for item in state['items'].values() if item['state'] in wanted],
                 'counts': store.counts(state)}
     if command == 'choose' and args.choice == 'continue':
         if args.input_file or args.rev is not None or args.dry_run:

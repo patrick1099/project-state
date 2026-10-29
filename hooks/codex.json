@@ -1,5 +1,5 @@
 {
-  "description": "Inject the shared project task board (git worktree snapshot + active tasks) at session start.",
+  "description": "Inject the shared project task board at session start, and remind each turn about pending cards recorded from this session.",
   "hooks": {
     "SessionStart": [
       {
@@ -9,6 +9,18 @@
             "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook",
             "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook",
             "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook-prompt",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook-prompt",
+            "timeout": 10
           }
         ]
       }

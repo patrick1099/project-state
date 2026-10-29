@@ -1,7 +1,7 @@
 # 结构: vibe-scripts/standard（锁的 Core/Adapter 拆在同目录 pstate_lock.py）
 # 用途: 会话互斥——同一仓库所有 worktree 共用的文件占用锁 ＋ 全局的 Obsidian 任务认领（谁在干哪件事）；旧待办看板只读兼容
 # 用法: py -3 pstate.py status | claim <任务目录> | release | take <会话号|任务目录> | lock on|off|auto
-#       | done <旧条目短名> | path | hook / hook-pre / hook-post / hook-fail / hook-end（Claude Code 钩子，读 stdin）
+#       | done <旧条目短名> | path | hook / hook-prompt / hook-pre / hook-post / hook-fail / hook-end（钩子，读 stdin）
 # 原始需求: "缺少项目记忆，或者说todo。有时候很容易冲突，和handoff"。几个会话同时干同一个个人项目时互斥：
 #           同时改同一批文件、同一件事做两遍，撞上就拦下由 AI 问用户；外加待办看板。进度正文写项目的 HANDOFF，不写这里。
 #           只管个人项目（公司仓不加锁、不新建条目）；状态放仓库外本机目录（按 git common dir 识别同一仓库）。
@@ -31,7 +31,7 @@ FIELD_STATUS = "状态"
 FIELD_HANDOFF = "交接"
 STATUSES = ("进行中", "阻塞", "待办")
 SLUG_RE = re.compile(r"^[\w.\-]+$")
-HOOK_COMMANDS = ("hook", "hook-pre", "hook-post", "hook-fail", "hook-end")
+HOOK_COMMANDS = ("hook", "hook-prompt", "hook-pre", "hook-post", "hook-fail", "hook-end")
 
 TASK_TEMPLATE = """# {title}
 
@@ -470,10 +470,14 @@ def read_hook_input():
     return json.loads(sys.stdin.read() or "{}")
 
 
+def thread_cmd():
+    return f'"{sys.executable}" "{Path(__file__).resolve()}"'
+
+
 def global_thread_hint():
     from pstate_threads.store import hook_hint
     try:
-        return hook_hint(state_home(), f'"{sys.executable}" "{Path(__file__).resolve()}"')
+        return hook_hint(state_home(), thread_cmd())
     except Exception:
         return ""
 
@@ -504,6 +508,16 @@ def cmd_hook(args):
     parts = [p for p in (hook_context(cwd, data.get("session_id", "")), global_thread_hint()) if p]
     if parts:
         emit(event, additionalContext="\n".join(parts))
+    return 0
+
+
+def cmd_hook_prompt(args):
+    """UserPromptSubmit：本会话记过的待续卡，每轮提醒 AI 做完就 done、有进展就 set。"""
+    from pstate_threads.store import session_reminder
+    data = read_hook_input()
+    text = session_reminder(state_home(), data.get("session_id") or "", thread_cmd())
+    if text:
+        emit(data.get("hook_event_name") or "UserPromptSubmit", additionalContext=text)
     return 0
 
 
@@ -602,7 +616,8 @@ def cmd_hook_end(args):
 
 
 COMMANDS = {"status": cmd_status, "new": cmd_new, "claim": cmd_claim, "release": cmd_release, "take": cmd_take,
-            "lock": cmd_lock, "done": cmd_done, "path": cmd_path, "hook": cmd_hook, "hook-pre": cmd_hook_pre,
+            "lock": cmd_lock, "done": cmd_done, "path": cmd_path, "hook": cmd_hook, "hook-prompt": cmd_hook_prompt,
+            "hook-pre": cmd_hook_pre,
             "hook-post": cmd_hook_post, "hook-fail": cmd_hook_fail, "hook-end": cmd_hook_end}
 
 
@@ -630,7 +645,8 @@ def build_parser():
     p = sub.add_parser("done", help="旧看板条目收尾：移出活跃视图（移到 done/）")
     p.add_argument("slug")
     sub.add_parser("path", help="打印本仓库的任务目录")
-    for name, desc in (("hook", "SessionStart 钩子"), ("hook-pre", "PreToolUse 钩子：写入前裁决"),
+    for name, desc in (("hook", "SessionStart 钩子"), ("hook-prompt", "UserPromptSubmit 钩子：本会话记过的待续卡提醒"),
+                       ("hook-pre", "PreToolUse 钩子：写入前裁决"),
                        ("hook-post", "PostToolUse 钩子"), ("hook-fail", "PostToolUseFailure 钩子"),
                        ("hook-end", "SessionEnd 钩子")):
         sub.add_parser(name, help=f"{desc}（读 stdin JSON）")

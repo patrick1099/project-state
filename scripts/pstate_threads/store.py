@@ -131,3 +131,20 @@ def hook_hint(home, cmd):
         return ''
     return (f"[pstate 待续] 全局待回顾 {active['open']} 件，已决定推进 {active['decided']} 件。"
             f"需要回顾时运行：{cmd} thread list；不自动扫描历史。")
+
+
+def session_reminder(home, session, cmd):
+    """Cards whose sources include this session, so the AI updates them as the work moves on."""
+    if not session:
+        return ''
+    mine = [item for item in read(Path(home) / 'threads')['items'].values()
+            if item['state'] in ('open', 'decided') and any(s['session'] == session for s in item['sources'])]
+    if not mine:
+        return ''
+    lines = ['[pstate 卡片] 本会话是下列待续卡片的来源：']
+    lines += [f"- {item['title']}（{item['id']}，rev {item['rev']}，{item['state']}，"
+              f"卡片最后更新 {item['log'][-1]['at'][:16]} UTC）" for item in mine]
+    lines.append(f"这轮做完后对照卡片自己判断，不用等用户开口：已做完 → {cmd} thread done <ID> --rev <N>"
+                 "（evidence 写实际提交、产物和验证范围）；有实质进展或结论变了 → thread set 更新 "
+                 "stopped_at / next_suggestion / questions；这轮没碰它就不用动。改了卡片就在回复里告诉用户改了什么。")
+    return '\n'.join(lines)
