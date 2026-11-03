@@ -1,13 +1,13 @@
 {
-  "description": "Inject the shared project task board at session start, and remind each turn about pending cards recorded from this session.",
+  "description": "Shared session reminders and pre-write file reservations for Codex.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook",
-            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook --host codex",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook --host codex",
             "timeout": 15
           }
         ]
@@ -18,9 +18,47 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook-prompt",
-            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook-prompt",
-            "timeout": 10
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook-prompt --host codex",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook-prompt --host codex",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(?:functions\\.)?(?:apply_patch|Bash|exec_command|shell_command|shell)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook-pre --host codex",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook-pre --host codex",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(?:functions\\.)?(?:apply_patch|Bash|exec_command|shell_command|shell)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook-post --host codex",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate.py\" hook-post --host codex",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate_end.py\"",
+            "commandWindows": "& \"${PLUGIN_ROOT}/scripts/pstate_end.ps1\"",
+            "timeout": 30
           }
         ]
       }

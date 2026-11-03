@@ -1,0 +1,15 @@
+{
+  "host": "Codex 0.164.0-alpha.11.1 Windows",
+  "captured": "2026-11-03",
+  "transport": "native app-server with local Responses fixture",
+  "scope": "isolated CODEX_HOME/PSTATE_HOME and temporary git repository",
+  "same_host_process": true,
+  "first_write": "A",
+  "conflicting_write_content": "A",
+  "write_after_holder_ends": "B",
+  "old_holder_removed_from_raw_state": true,
+  "final_effective_session_count": 0,
+  "final_effective_claim_count": 0,
+  "end_receipt_count": 2,
+  "note": "raw last-holder record is excluded by durable end receipt until next adjudication or full cleanup; hook/completed alone was not used as release evidence"
+}

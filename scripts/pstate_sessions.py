@@ -164,8 +164,8 @@ def repair_command(task, who, reasons):
     return '& ' + ' '.join("'" + arg.replace("'", "''") + "'" for arg in args)
 
 
-def link_claim(home, task, sid, reason):
-    who = identity('claude', sid)
+def link_claim(home, task, sid, reason, platform_name="claude"):
+    who = identity(platform_name, sid)
     try:
         result = link_sessions(home, task, [(who, [reason])])
     except (OSError, ValueError, TimeoutError) as exc:

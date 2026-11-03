@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pstate_lock as L
 import pstate_sessions as S
+import pstate_hooks as H
 
 # ===== 1 配置/常量 =====
 STATE_HOME_ENV = "PSTATE_HOME"
@@ -274,7 +275,7 @@ def load_tasks(state_dir):
 
 
 def self_cmd():
-    return f'py -3 "{Path(__file__).resolve()}"'
+    return f'"{sys.executable}" "{Path(__file__).resolve()}"'
 
 
 def inflight_marker(tool_id):
@@ -297,10 +298,19 @@ def personal_repo(top, sdir):
     return L.is_personal(L.load_state(sdir)["enabled"], L.has_blueprint(top, Path(top) / "_"))
 
 
+def current_host_session():
+    candidates = [(host, os.environ.get(key)) for host, key in
+                  (("claude", SESSION_ENV), ("codex", "CODEX_THREAD_ID")) if os.environ.get(key)]
+    if len(candidates) != 1:
+        raise RuntimeError("需要唯一的 Claude/Codex 会话环境，不能同时存在或均缺失")
+    return candidates[0]
+
+
 def me_from_env(backend):
-    me, chain = L.identify(backend, os.environ.get(SESSION_ENV, ""))
+    host, sid = current_host_session()
+    me, chain = L.identify(backend, sid, host=host)
     if not me:
-        raise RuntimeError(f"认不出当前会话（需要在 Claude Code 会话里运行，且有 {SESSION_ENV}）")
+        raise RuntimeError("认不出当前 Claude/Codex 会话进程")
     return me, chain
 
 
@@ -323,7 +333,8 @@ def build_status(cwd, me_sid=""):
 
 
 def cmd_status(args):
-    text, *_ = build_status(args.cwd, os.environ.get(SESSION_ENV, ""))
+    sid = os.environ.get(SESSION_ENV, "") or L.session_key("codex", os.environ.get("CODEX_THREAD_ID", ""))
+    text, *_ = build_status(args.cwd, sid)
     print(text)
     return 0
 
@@ -353,7 +364,7 @@ def cmd_claim(args):
               f"问他等对方还是接手；用户说接手再跑：take \"{real}\"", file=sys.stderr)
         return 1
     print(f"已认领 {L.task_label(real)}（会话 {L.short(me['sid'])}）")
-    return S.link_claim(state_home(), real, me["sid"], "claim")
+    return S.link_claim(state_home(), real, me.get("native_sid", me["sid"]), "claim", platform_name=me.get("host", "claude"))
 
 
 def cmd_release(args):
@@ -399,7 +410,7 @@ def take_task(target, me, backend):
         return 1
     print(f"已接手任务 {L.task_label(real)}（原认领会话 {L.short(prev)}）。只转了这一项认领，"
           "对方在各仓库的文件占用没动；写文件被拦时按拦截提示里的 --cwd <仓库> take <会话号> 处理")
-    return S.link_claim(state_home(), real, me["sid"], "take")
+    return S.link_claim(state_home(), real, me.get("native_sid", me["sid"]), "take", platform_name=me.get("host", "claude"))
 
 
 def cmd_take(args):
@@ -503,9 +514,13 @@ def hook_context(cwd, me_sid):
 
 def cmd_hook(args):
     data = read_hook_input()
+    host = getattr(args, "host", "claude")
+    sid = L.session_key(host, data.get("session_id", ""))
+    if L.E.is_ended(state_home(), sid):
+        H.end(data, state_home(), host)
     cwd = data.get("cwd") or os.getcwd()
     event = data.get("hook_event_name") or "SessionStart"
-    parts = [p for p in (hook_context(cwd, data.get("session_id", "")), global_thread_hint()) if p]
+    parts = [p for p in (hook_context(cwd, L.session_key(getattr(args, "host", "claude"), data.get("session_id", ""))), global_thread_hint()) if p]
     if parts:
         emit(event, additionalContext="\n".join(parts))
     return 0
@@ -522,97 +537,24 @@ def cmd_hook_prompt(args):
 
 
 def cmd_hook_pre(args):
-    data = read_hook_input()
-    if data.get("tool_name") not in L.WRITE_TOOLS:
-        return 0
-    ti = data.get("tool_input") or {}
-    path = ti.get("file_path") or ti.get("notebook_path")
-    if not path:
-        return 0
-    abs_path = os.path.realpath(os.path.join(data.get("cwd") or os.getcwd(), path))
-    loc = L.locate(abs_path)
-    if not loc:
-        return 0
-    top, common = loc
-    sdir = state_dir_for(common)
-    if not L.is_personal(L.load_state(sdir)["enabled"], L.has_blueprint(top, abs_path)):
-        return 0
-    backend = L.process_backend()
-    me, chain = L.identify(backend, data.get("session_id"), data.get("transcript_path") or "")
-    if not me:
-        return 0
-    rel = L.rel_key(top, abs_path)
-    tool_id = data.get("tool_use_id") or f"anon-{os.getpid()}-{time.time()}"
-    now = time.time()
-    with L.mutex(sdir):
-        st = L.load_state(sdir)
-        L.prune(st, backend.alive)
-        decision, info = L.evaluate_write(st, rel, me, chain, tool_id, top, now, lambda c: L.released(c, rel))
-        L.save_state(sdir, st)
-    if decision == "deny":
-        emit("PreToolUse", permissionDecision="deny",
-             permissionDecisionReason=L.deny_text(info, st, now, L.log_age, f'{self_cmd()} --cwd "{top}"',
-                                                  L.claims_snapshot(claims_home())))
-    elif info["kind"] == "claimed":
-        marker = inflight_marker(tool_id)
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(f"{sdir}\n{me['sid']}\n", encoding="utf-8")
+    H.begin(read_hook_input(), state_home(), state_dir_for, self_cmd(), host=getattr(args, "host", "claude"))
     return 0
 
 
-def finish_hook(failed):
-    data = read_hook_input()
-    tool_id = data.get("tool_use_id")
-    if not tool_id:
-        return 0
-    marker = inflight_marker(tool_id)
-    if not marker.exists():
-        return 0
-    sdir = marker.read_text(encoding="utf-8").splitlines()[0]
-    with L.mutex(sdir):
-        st = L.load_state(sdir)
-        L.finish_tool(st, tool_id, failed)
-        L.save_state(sdir, st)
-    marker.unlink(missing_ok=True)
-    return 0
+def finish_hook(failed, host="claude"):
+    return H.finish(read_hook_input(), state_home(), failed, host)
 
 
 def cmd_hook_post(args):
-    return finish_hook(failed=False)
+    return finish_hook(False, getattr(args, "host", "claude"))
 
 
 def cmd_hook_fail(args):
-    return finish_hook(failed=True)
+    return finish_hook(True, getattr(args, "host", "claude"))
 
 
 def cmd_hook_end(args):
-    sid = read_hook_input().get("session_id")
-    if not sid:
-        return 0
-    for lock_file in state_home().glob(f"*/{L.LOCK_FILE}"):
-        sdir = lock_file.parent
-        if sid not in L.load_state(sdir)["sessions"]:
-            continue
-        with L.mutex(sdir):
-            st = L.load_state(sdir)
-            L.drop_session(st, sid)
-            L.save_state(sdir, st)
-    try:
-        home = claims_home()
-        if (home / L.CLAIMS_FILE).exists():
-            with L.mutex(home):
-                claims = L.load_claims(home)
-                if L.release_claims(claims, sid):
-                    L.save_claims(home, claims)
-    except (L.ClaimsError, OSError):
-        pass
-    for marker in (state_home() / "inflight").glob("*"):
-        try:
-            if marker.read_text(encoding="utf-8").splitlines()[1:2] == [sid]:
-                marker.unlink()
-        except (OSError, IndexError):
-            pass
-    return 0
+    return H.end(read_hook_input(), state_home(), getattr(args, "host", "claude"))
 
 
 COMMANDS = {"status": cmd_status, "new": cmd_new, "claim": cmd_claim, "release": cmd_release, "take": cmd_take,
@@ -629,6 +571,7 @@ def build_parser():
     sub.add_parser("thread", help="全局待续事项；thread --ai-help 查看结构化契约")
     sub.add_parser("sweep", help="内部后台与联合回顾页；sweep --ai-help 查看契约")
     sub.add_parser("link", help="显式关联任务会话；link --help 查看参数")
+    sub.add_parser("run", help="声明全部写路径后执行命令；run --ai-help 查看契约")
     sub.add_parser("status", help="工作区现场 + 活会话 + 全局任务认领（+ 待收尾的旧看板条目）")
     p = sub.add_parser("new", help="（已停用）旧看板新建条目，现在一律拒绝")
     p.add_argument("slug")
@@ -649,13 +592,18 @@ def build_parser():
                        ("hook-pre", "PreToolUse 钩子：写入前裁决"),
                        ("hook-post", "PostToolUse 钩子"), ("hook-fail", "PostToolUseFailure 钩子"),
                        ("hook-end", "SessionEnd 钩子")):
-        sub.add_parser(name, help=f"{desc}（读 stdin JSON）")
+        p = sub.add_parser(name, help=f"{desc}（读 stdin JSON）")
+        p.add_argument("--host", choices=("claude", "codex"), default="claude")
     return ap
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     routed = argv[2:] if argv[:1] == ["--cwd"] and len(argv) > 2 else argv
+    if routed[:1] == ["run"]:
+        from pstate_run import main as run_main
+        cwd = argv[1] if argv[:1] == ["--cwd"] else os.getcwd()
+        return run_main(routed[1:], cwd, state_home(), state_dir_for, self_cmd())
     if routed[:1] == ["link"]:
         from pstate_sessions_cli import main as link_main
         return link_main(routed[1:], state_home())
@@ -674,28 +622,32 @@ def main(argv=None):
         return COMMANDS[args.cmd](args)
     except L.ClaimsError as e:
         if args.cmd in HOOK_COMMANDS:
-            return 0
+            raise
         print(f"{e}。先人工检查这个文件，不要删除或清空。", file=sys.stderr)
         return 1
     except RuntimeError as e:
         if args.cmd in HOOK_COMMANDS:
-            return 0
+            raise
         print(f"不在 git 仓库里，或 git 调用失败：{e}", file=sys.stderr)
         return 1
 
 
 def run_as_hook(argv):
-    """钩子入口：任何异常（含参数错误、超时、锁文件忙）都静默放行，退出 0。"""
-    real_err = sys.stderr
+    event = next((a for a in argv if a in HOOK_COMMANDS), "hook")
     try:
-        with open(os.devnull, "w", encoding="utf-8") as sys.stderr:
-            main(argv)
-    except BaseException:
-        pass
-    finally:
-        sys.stderr = real_err
-    sys.stdout.flush()
-    return 0
+        return main(argv)
+    except SystemExit as exc:
+        if exc.code in (0, None):
+            return 0
+        error = ValueError("钩子参数无效")
+    except Exception as exc:
+        error = exc
+    message = H.diagnostic(state_home(), event, error)
+    sys.stderr.write(message + "\n")
+    if event == "hook-pre":
+        H.emit_deny(message + "；写入未放行，先修复诊断，不要绕到其他工具。")
+        return 2
+    return 1
 
 
 if __name__ == "__main__":

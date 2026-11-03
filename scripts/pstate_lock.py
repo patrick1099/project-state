@@ -12,6 +12,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import pstate_end as E
+
 # ===== 1 配置/常量 =====
 LOCK_FILE = "locks.json"
 CLAIMS_FILE = "task-claims.json"
@@ -20,6 +22,7 @@ MUTEX_WAIT_SECONDS = 5.0
 GIT_TIMEOUT_SECONDS = 5
 INTEGRATION_BRANCHES = ("main", "master")
 CLAUDE_PROCESS_NAMES = ("claude.exe",)
+HOST_PROCESSES = {"claude": CLAUDE_PROCESS_NAMES, "codex": ("codex.exe", "codex")}
 BLUEPRINT_MAIN = Path("docs") / "BLUEPRINT.md"
 BLUEPRINT_SIDECAR_GLOB = "*.BLUEPRINT.md"
 WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
@@ -53,18 +56,22 @@ def is_personal(enabled, has_blueprint):
 
 
 def short(sid):
-    return (sid or "?")[:SHORT_ID]
+    return (sid or "?").removeprefix("codex:")[:SHORT_ID]
+
+
+def session_key(host, sid):
+    return "codex:" + sid if host == "codex" and not sid.startswith("codex:") else sid
 
 
 def in_family(holder, chain):
     """holder 是本进程链上的某个 claude 进程（同进程的子代理、本会话起的 headless 子会话）→ 视为同一家。"""
-    return (holder.get("pid"), holder.get("ctime")) in chain
+    return holder.get("host", "claude") == "claude" and (holder.get("pid"), holder.get("ctime")) in chain
 
 
 def upsert_session(st, me, now):
     s = st["sessions"].setdefault(me["sid"], {"task": None, "since": now})
     s.update(pid=me["pid"], ctime=me["ctime"], transcript=me.get("transcript") or s.get("transcript", ""),
-             seen=now)
+             seen=now, host=me.get("host", "claude"), native_sid=me.get("native_sid", me["sid"]))
     return s
 
 
@@ -115,6 +122,7 @@ def evaluate_write(st, rel, me, chain, tool_id, worktree, now, released):
 
 def finish_tool(st, tool_id, failed):
     """工具结束：成功 → 记为已写入；失败 → 只撤销这次新建、且从没写成过的占用。"""
+    finished = []
     for rel, claim in list(st["claims"].items()):
         inflight = claim.get("inflight") or {}
         if tool_id not in inflight:
@@ -124,8 +132,8 @@ def finish_tool(st, tool_id, failed):
             claim["written"] = True
         elif created and not inflight and not claim.get("written"):
             del st["claims"][rel]
-        return rel
-    return None
+        finished.append(rel)
+    return finished
 
 
 def claim_global(claims, key, me, now, path=None):
@@ -192,7 +200,7 @@ def resolve_target(st, target, me_sid):
     by_task = [sid for sid, s in st["sessions"].items() if s.get("task") == target and sid != me_sid]
     if len(by_task) == 1:
         return by_task[0]
-    by_id = [sid for sid in st["sessions"] if sid.startswith(target) and sid != me_sid]
+    by_id = [sid for sid in st["sessions"] if (sid.startswith(target) or sid.removeprefix("codex:").startswith(target)) and sid != me_sid]
     return by_id[0] if len(by_id) == 1 else None
 
 
@@ -356,15 +364,18 @@ def process_backend():
     return cls() if cls else None
 
 
-def identify(backend, sid, transcript=""):
-    """本会话 = 父进程链上最近的 claude 进程。认不出返回 (None, [])，调用方据此放行、不加锁。"""
+def identify(backend, sid, transcript="", host="claude"):
     if backend is None or not sid:
         return None, []
+    names = HOST_PROCESSES.get(host)
+    if names is None:
+        raise ValueError("unsupported session host")
     chain = backend.ancestry()
     for i, (pid, ct, name) in enumerate(chain):
-        if name.lower() in CLAUDE_PROCESS_NAMES:
-            me = {"sid": sid, "pid": pid, "ctime": ct, "transcript": transcript}
-            return me, [(p, c) for p, c, _ in chain[i:]]
+        if name.lower() in names:
+            me = {"sid": session_key(host, sid), "native_sid": sid, "host": host,
+                  "pid": pid, "ctime": ct, "transcript": transcript}
+            return me, [(p, c) for p, c, _ in chain[i:]] if host == "claude" else []
     return None, []
 
 
@@ -417,12 +428,35 @@ def mutex(state_dir):
         os.close(fd)
 
 
-def load_state(state_dir):
+class StateError(RuntimeError):
+    pass
+
+
+def load_state(state_dir, include_ended=False):
     p = Path(state_dir) / LOCK_FILE
     try:
-        return normalize_state(json.loads(p.read_text(encoding="utf-8")))
-    except (OSError, ValueError):
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return empty_state()
+    except (OSError, ValueError) as exc:
+        raise StateError(f"文件锁状态无法读取，保留原件：{p}") from exc
+    if (not isinstance(raw, dict) or type(raw.get("version")) is not int or raw.get("version") != 1
+            or not (raw.get("enabled") is None or isinstance(raw.get("enabled"), bool))
+            or any(not isinstance(raw.get(k), dict) for k in ("sessions", "claims", "taken"))):
+        raise StateError(f"文件锁状态结构损坏，保留原件：{p}")
+    if any(not isinstance(v, dict) for k in ("sessions", "claims", "taken") for v in raw[k].values()):
+        raise StateError(f"文件锁状态记录损坏，保留原件：{p}")
+    for rel, claim in raw["claims"].items():
+        if (not isinstance(rel, str) or not isinstance(claim.get("holder"), str)
+                or not isinstance(claim.get("worktree"), str)
+                or not isinstance(claim.get("inflight", {}), dict)):
+            raise StateError(f"文件锁占用记录损坏，保留原件：{p}")
+    st = normalize_state(raw)
+    if not include_ended:
+        for sid in list(st["sessions"]):
+            if E.is_ended(Path(state_dir).parent, sid):
+                drop_session(st, sid)
+    return st
 
 
 def save_state(state_dir, st):
@@ -436,7 +470,7 @@ class ClaimsError(RuntimeError):
     pass
 
 
-def load_claims(home):
+def load_claims(home, include_ended=False):
     """全局认领表。文件缺失 = 空；读不了或结构不对就抛 ClaimsError，绝不当空表覆盖。"""
     p = Path(home) / CLAIMS_FILE
     if not p.exists():
@@ -447,6 +481,8 @@ def load_claims(home):
         raise ClaimsError(f"任务认领表读不了：{p}（{e}）") from e
     if not isinstance(data, dict) or any(not isinstance(v, dict) or not v.get("sid") for v in data.values()):
         raise ClaimsError(f"任务认领表结构不对：{p}")
+    if not include_ended:
+        data = {k: v for k, v in data.items() if not E.is_ended(Path(home).parent, v["sid"])}
     return data
 
 

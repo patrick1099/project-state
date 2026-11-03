@@ -106,7 +106,7 @@ do/later/drop/reopen 需要 choice.json 的 said/source。said 必须逐字出�
 
 ## 调用和 JSON
 
-PowerShell 用 `pstate`，Git Bash 用 `pstate.cmd`。无 shim 时直接调用脚本；本机 Codex 的解释器为 `C:/Users/huawei/AppData/Local/Programs/Python/Python314/python.exe`。先查 `pstate thread --ai-help`。复杂输入用 UTF-8 JSON 文件或 `--input-file -` 的 stdin；自动调用用参数数组，不能把原话插入命令字符串。
+PowerShell 用 `pstate`，Git Bash 用 `pstate.cmd`。无 shim 时直接调用脚本；本机 Codex 的解释器为 `<Python绝对路径>`。先查 `pstate thread --ai-help`。复杂输入用 UTF-8 JSON 文件或 `--input-file -` 的 stdin；自动调用用参数数组，不能把原话插入命令字符串。
 
 默认历史输入示例（时间与预算按本次范围修改）：
 
@@ -160,9 +160,11 @@ thread 的 JSON 信封为 ok/data/error/meta；成功在 stdout，失败在 stde
 - **任务认领（全局，与 git 仓无关）**：`claim <Obsidian 任务目录绝对路径>` 认的是“这件事谁在干”，防同一件事被两个会话各做一遍。存在 PSTATE_HOME/claims/，从哪个目录启动都一样。被拒说明别的活会话在干，停下问用户；用户说接手才 `take <任务目录>`，只转这一项认领。
 - **任务会话**：claim/take 成功后自动写任务目录 `会话.md`；release 和会话结束不删关联。显式补记用 `link <任务目录> --platform claude|codex --session ID [--agent ID] [--reason 标签]`，无需认领或活会话。省略身份仅在 CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID 恰有一个时取默认；两者都在须显式指定。
 - 派 Codex 等子 agent 到任务干活后，主会话用 `link <任务目录> --platform codex --session <派工回执里的 session id>` 登记。转交写全部 sources 和执行会话；关联失败可对同一目标、当前 rev 重跑 transfer 补记，无需 reopen。
-- **文件锁（按仓库）**：个人工程按蓝图识别，`lock on|off|auto` 可设置。原生编辑前按仓库相对路径占用，跨 worktree 同路径也互斥；进程结束、会话结束或满足合并清理条件时释放。同进程/祖先会话放行，兄弟 headless 会话仍互斥。文件锁不需要先 claim。
+- **文件锁（按仓库）**：个人工程按蓝图识别，`lock on|off|auto` 可设置。原生编辑前按仓库相对路径占用，跨 worktree 同路径也互斥；进程结束、会话结束或满足合并清理条件时释放。Claude 同进程/祖先会话放行，兄弟 headless 会话仍互斥；Codex 同 PID 不同线程仍互斥。文件锁不需要先 claim。
 - 遇到“[pstate 锁]”必须停下，向用户说明占用者、worktree、它认领的任务及时间，询问等候还是接手；用户明确接手才照提示跑 `--cwd <被写文件所在仓库> take <会话号>` 后重试，只转该仓文件占用，不用 shell/python 绕过。
 - `release` 放掉本会话全部任务认领，以及 `--cwd` 所在仓库的文件占用（不在仓库里时会说明文件占用没处理）。squash/cherry-pick 合并或放弃施工时跑。闲置多久都不是自动接手授权。
 - **旧看板已停用**：`new` 一律拒绝（含 --force），要跟踪的活去 Obsidian 建任务。`status` 仍列出待收尾的旧条目，`done <旧短名>` 只是把旧条目移出活跃视图，和 thread done 是两个命令；没做完的旧条目要先把独有信息迁到承接处，再 done 并说明“已迁出”，不能宣称业务完成。
-- claim/take/release 只支持有 Claude 会话身份的环境；Codex 认领与锁未实现。shell/python 写入仍是原生编辑锁盲区。
+- claim/take/release 支持唯一的 Claude 或 Codex 会话身份。补丁多文件与移动两端一起裁决，冲突不登记部分占用。
+- shell/Python 的已知写目标也受锁约束；若命令写集合不明且相关个人仓已有别人的活锁，会被拒绝。改成 `pstate run --write <全部目标> -- <命令参数>`，或用 `--command-file <argv.json>`；先用 `--dry-run --json` 看裁决，不能拿声明不实的路径绕锁。`pstate run --ai-help` 查看完整契约。
+- 写前错误会拒绝写入，诊断在 `PSTATE_HOME/hook-diagnostics`；损坏锁状态保留原件，不能清空当修复。只读工具不因锁冲突受阻。
 - 会话开始只在有别的活会话或别的会话的任务认领时注入现场，另附全局 open/decided 计数；不注入旧条目、不扫历史。脚本/CLI、纯翻译和历史样本验证不等于安装后宿主钩子已验证。

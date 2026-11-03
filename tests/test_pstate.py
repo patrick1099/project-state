@@ -194,7 +194,7 @@ class EndToEndTest(unittest.TestCase):
         git(self.plain, "commit", "-q", "--allow-empty", "-m", "i")
         self.state = base / "state"
         self.proc = FakeProc()
-        self.patches = [mock.patch.dict(os.environ, {pstate.STATE_HOME_ENV: str(self.state)}),
+        self.patches = [mock.patch.dict(os.environ, {pstate.STATE_HOME_ENV: str(self.state), "CODEX_THREAD_ID": ""}),
                         mock.patch.object(L, "process_backend", lambda: self.proc)]
         for p in self.patches:
             p.start()
@@ -349,10 +349,12 @@ class EndToEndTest(unittest.TestCase):
         self.pre(A, self.main / "a.txt", "t5")
         self.assertIsNone(self.pre(B, self.main / "a.txt", "t6"), "lock off 优先于蓝图")
 
-    def test_hook_entry_never_fails(self):
-        self.assertEqual(pstate.run_as_hook(["hook-pre", "--bogus"]), 0)
-        with mock.patch("sys.stdin", io.StringIO("not json")):
-            self.assertEqual(pstate.run_as_hook(["hook-pre"]), 0)
+    def test_write_hook_errors_block_and_leave_diagnostics(self):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(pstate.run_as_hook(["hook-pre", "--bogus"]), 2)
+            with mock.patch("sys.stdin", io.StringIO("not json")):
+                self.assertEqual(pstate.run_as_hook(["hook-pre"]), 2)
+        self.assertTrue(list((self.state / "hook-diagnostics").glob("*.json")))
 
     def test_hook_outside_repo_is_silent(self):
         self.assertEqual(self.session_start(A, self.tmp.name), "")
