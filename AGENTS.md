@@ -1,6 +1,6 @@
 # project-state
 
-先读 docs/HANDOFF.md（如有）的有效约定及当前批次，再读 docs/BLUEPRINT.md 对应行为；改动前按主题查 docs/CHANGELOG.md 的取舍。没有 HANDOFF 表示没有进行中的施工；已完成合并的证据入口为 docs/evidence/merge-b2/final-closure.md。
+先读 docs/HANDOFF.md（如有）的有效约定及当前批次，再读 docs/BLUEPRINT.md 对应行为；改动前按主题查 docs/CHANGELOG.md 的取舍。没有 HANDOFF 表示没有进行中的施工；hooks 实现及部署证据见 docs/evidence/hooks-0.9.0.md，早期合并记录见 docs/evidence/merge-b2/final-closure.md。
 
 ## 命令
 
