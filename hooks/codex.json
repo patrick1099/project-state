@@ -58,7 +58,7 @@
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate_end.py\"",
             "commandWindows": "& \"${PLUGIN_ROOT}/scripts/pstate_end.ps1\"",
-            "timeout": 30
+            "timeout": 3
           }
         ]
       }
