@@ -1,5 +1,9 @@
 # project-state 变更记录
 
+## 2026-11-06 桌面迁移后的路径更新
+
+0.9.3：sweep.toml 的 vault_dir 改为 D 盘 Obsidian 目录，两份插件 manifest 同步升版。
+
 ## 2026-11-03 0.9.2：会话结束超时配置对齐宿主限制
 
 起因：用户看到 `clamping SessionEnd timeout to 3s` 警告；原配置为 30 秒，宿主实际已限制为 3 秒。

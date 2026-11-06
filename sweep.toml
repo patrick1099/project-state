@@ -3,7 +3,7 @@
 
 [paths]
 # 「悬着的事」页和「已处理」页所在的 Obsidian 专属文件夹
-vault_dir = 'C:\Users\huawei\Desktop\Obsidian Vault\03-悬着的事'
+vault_dir = 'D:\Desktop\Obsidian Vault\03-悬着的事'
 page_name = "悬着的事.md"
 closed_name = "悬着的事-已处理.md"
 # 超出窗口的按周归档到 vault_dir 下的这个子目录
