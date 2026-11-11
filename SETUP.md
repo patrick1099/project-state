@@ -33,7 +33,23 @@
 
 只有用户需要后台功能时才配置。先读 `sweep --ai-help`、[当前切换命令](docs/evidence/merge-b1/b2-commands.md) 和稳定活源的 sweep.toml，核对输出目录、历史来源、模型预算和运行账号。不要沿用仓库中另一台机器的路径。
 
-计划任务只从稳定活源注册，不能从 worktree 或版本缓存注册。Windows 启动器需要可执行的绝对解释器路径并保持要求的明文状态。安装任务、启用 writer、历史迁移是不同动作，按用户授权分别执行；Codex 交互发现不等于支持后台自答。
+计划任务只从稳定活源注册，不能从 worktree 或版本缓存注册。Windows 启动器需要可执行的绝对解释器路径并保持要求的明文状态。安装任务、启用 writer、历史迁移是不同动作，按用户授权分别执行。历史来源平台和判断平台分别配置：Codex 可负责判断，Codex 原生历史仍只提供交互发现，不承诺原生会话 resume。
+
+## 输出目录搬迁与判断平台
+
+默认 `sweep.toml` 使用 `vault_dir = "@output"`。`@output` 解析本机 `PSTATE_HOME/sweep/paths.json` 的 `output_root`；外部绝对目录只保存在这份本机映射，随包配置不写机器路径。schema2 的 activation 与 owner 均用相对的 `state = "."`、`out = "."`，分别锚定状态目录和映射的输出根，以 token 核对配对。首次启用仍用显式 `switch --out`。
+
+目录已经搬好后，先预演再执行登记迁移：
+
+```text
+pstate sweep relocate --from-out <旧输出目录> --out <新输出目录> --dry-run --json
+pstate sweep relocate --from-out <旧输出目录> --out <新输出目录> --json
+pstate sweep status --json
+```
+
+状态目录也搬过时增加 `--from-state <旧状态目录，含 sweep>`。迁移仅重新登记，不复制、删除或重写页面、来源库、事项库；原登记保存在 `sweep/relocations/`。旧输出仍存在且指向另一个物理目录时拒绝。中断后按原参数重跑，不能清登记、重建空状态或用 switch 绕过。
+
+`judge.backend` 选择 `codex` 或 `claude`；当前随包配置优先 Codex。分别检查所选 CLI 的登录与可执行入口；模型字段留空时 Codex 使用其 CLI 默认，显式模型名须在目标机器实测。Codex 以临时、只读进程分类归一正文，不加载用户配置和项目规则，不恢复原 Claude 会话；输入长度、超时与单轮调用数按配置限制。Claude 保留原有模式和单次美元预算；Codex 不提供同名美元预算参数。错误按所选平台报告，不自动切换。
 
 ## 验证、升级与卸载
 

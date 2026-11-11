@@ -12,8 +12,8 @@ from pathlib import Path
 
 from pstate_threads.cli import Parser, common, envelope, machine_args, read_input
 from pstate_threads.core import ThreadError
-from . import config, runtime, migration, review
-from .adapters import claude_judge, docgate, store, schtask
+from . import config, runtime, migration, relocation, review
+from .adapters import judges, docgate, store, schtask, output
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "sweep.toml"
 
@@ -34,6 +34,13 @@ Use subprocess.run([python_path, script_path, "sweep", "status", "--json"]) with
 Inspect or refresh the unified review pages. New installations are disabled until explicit ownership switch.
 
 ## Command Reference
+relocate: required --from-out OLD --out NEW; optional --from-state OLD_STATE_DIR, --dry-run.
+Rebind an already moved output and upgrade registrations to relative schema2. Does not copy/delete pages,
+sources or threads. Absolute external output root lives only in local sweep/paths.json; state/out are .
+relative to the state directory and mapped output root. Original registrations are retained as audit snapshots.
+Interrupted relocation blocks run; retry the same parameters. Existing distinct old directory is refused.
+judge backend: judge.backend selects the registered adapter; no implicit platform fallback.
+Codex uses normalized native conversation text, an ephemeral read-only process and JSON schema output.
 status: optional --config PATH; reads PSTATE_HOME/sweep/sources.json.
 review: required --input-file PATH or - (stdin); optional --dry-run.
 Frozen JSON requires platform/session/review_version/files/items/complete. files maps platforms to explicit
@@ -93,11 +100,15 @@ def parser():
         command = sub.add_parser(name)
         common(command)
         command.add_argument("--config", default=argparse.SUPPRESS)
-        if name in ("run", "switch", "rollback", "import-legacy", "reconcile"):
+        if name in ("run", "switch", "rollback", "import-legacy", "reconcile", "relocate"):
             command.add_argument("--out")
             command.add_argument("--dry-run", action="store_true")
         if name in ("switch", "import-legacy", "reconcile"):
             command.add_argument("--legacy-state", required=name in ("import-legacy", "reconcile"))
+        if name == "relocate":
+            command.add_argument("--from-out", required=True)
+            command.add_argument("--from-state")
+            command.set_defaults(out=None)
         if name == "review":
             command.add_argument("--input-file", required=True)
             command.add_argument("--dry-run", action="store_true")
@@ -111,14 +122,31 @@ def parser():
     return root
 
 
+def selected_output(args, home, cfg):
+    if getattr(args, "out", None):
+        return str(Path(args.out).expanduser().resolve())
+    if cfg["vault_dir"] != "@output":
+        return cfg["vault_dir"]
+    active = output.activation(Path(home) / "sweep")
+    if active:
+        return active["out"]
+    raise RuntimeError("sweep is disabled; first switch requires --out DIR")
+
+
+def cmd_relocate(args, home, cfg):
+    if not args.out:
+        raise ThreadError("relocate requires --out DIR")
+    return relocation.relocate(home, args.out, args.from_out, args.from_state, args.dry_run)
+
+
 def cmd_run(args, home, cfg):
     state_dir = Path(home) / "sweep"
-    out_dir = args.out or cfg["vault_dir"]
+    out_dir = selected_output(args, home, cfg)
     runtime.require_enabled(home, state_dir, out_dir)
     options = read_input(args.input_file) if args.input_file else None
     if options is not None and set(options) - {"roots", "files"}:
         raise ThreadError("run input supports only roots/files")
-    judge = claude_judge.ClaudeJudge(cfg, scratch_dir=str(state_dir / "scratch"))
+    judge = judges.create(cfg, scratch_dir=str(state_dir / "scratch"))
     gate_loader = lambda: docgate.load(docgate.locate(cfg["installed_plugins"], cfg["doc_gate"] or None))
     return runtime.run_sweep(cfg, judge, gate_loader, out_dir, state_dir, max_calls=args.max_calls,
         only_mode=args.only_mode, no_judge=args.no_judge, threads_dir=Path(home) / "threads",
@@ -139,15 +167,15 @@ def cmd_sources(args, home, cfg):
 
 
 def cmd_import(args, home, cfg):
-    return migration.import_legacy(cfg, home, args.legacy_state, args.out or cfg["vault_dir"], args.dry_run)
+    return migration.import_legacy(cfg, home, args.legacy_state, selected_output(args, home, cfg), args.dry_run)
 
 
 def cmd_switch(args, home, cfg):
-    return migration.switch(cfg, home, args.out or cfg["vault_dir"], args.legacy_state, args.dry_run)
+    return migration.switch(cfg, home, selected_output(args, home, cfg), args.legacy_state, args.dry_run)
 
 
 def cmd_rollback(args, home, cfg):
-    return migration.rollback(cfg, home, args.out or cfg["vault_dir"], args.dry_run)
+    return migration.rollback(cfg, home, selected_output(args, home, cfg), args.dry_run)
 
 
 def cmd_review(args, home, cfg):
@@ -177,7 +205,7 @@ def cmd_task(args, home, cfg):
 COMMANDS = {"run": cmd_run, "status": cmd_status, "sources": cmd_sources,
             "review": cmd_review, "install-task": cmd_task, "uninstall-task": cmd_task,
             "import-legacy": cmd_import, "reconcile": cmd_import,
-            "switch": cmd_switch, "rollback": cmd_rollback}
+            "switch": cmd_switch, "rollback": cmd_rollback, "relocate": cmd_relocate}
 
 
 def _main(argv, home):

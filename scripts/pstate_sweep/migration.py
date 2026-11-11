@@ -172,26 +172,26 @@ def switch(cfg, home, out, legacy_state=None, dry_run=False):
             snapshots = state.setdefault("switch_snapshots", {})
             snapshots.setdefault(_digest(current), current)
             token = active.get("token") or uuid.uuid4().hex
-            pending = {"version": 1, "state": output.canonical(state_dir), "out": output.canonical(out),
-                       "token": token, "phase": "switching", "legacy_state": str(legacy_state) if legacy_state else None}
+            pending = output.portable_record(token, phase="switching", legacy_state=str(legacy_state) if legacy_state else None)
             if lock:
                 pending["legacy_lock"] = lock.signature()
             store.save_state(state_dir, state, dry_run=dry_run)
             if dry_run:
                 # The same ownership and low-level write gates run against a virtual activation.
-                with output.preview_activation(pending):
+                with output.preview_activation({**pending, "state": output.canonical(state_dir), "out": output.canonical(out)}):
                     result = runtime.write_pages(cfg, state, out, time.time(), cfg.get("since_ts"), [], None,
                         lambda: store.save_state(state_dir, state, dry_run=True), snapshot=snapshot, dry_run=True)
                 return {**report, **result, "phase": "preview", "dry_run": True}
-            store.write_atomic(state_dir / output.ACTIVATION_FILE, json.dumps(pending))
+            output.write_registration(state_dir / output.PATHS_FILE, {"version": 1, "output_root": output.canonical(out)})
+            output.write_registration(state_dir / output.ACTIVATION_FILE, pending)
             if lock:
                 lock.keep = True
-            store.write_atomic(Path(output.canonical(out)) / output.OWNER_FILE,
-                               json.dumps({key: pending[key] for key in ("version", "state", "out", "token")}))
+            output.write_registration(Path(output.canonical(out)) / output.OWNER_FILE,
+                                      {key: pending[key] for key in ("version", "state", "out", "token")})
             result = runtime.write_pages(cfg, state, out, time.time(), cfg.get("since_ts"), [], None,
                 lambda: store.save_state(state_dir, state), snapshot=snapshot)
             pending["phase"] = "enabled"
-            store.write_atomic(state_dir / output.ACTIVATION_FILE, json.dumps(pending))
+            output.write_registration(state_dir / output.ACTIVATION_FILE, pending)
             return {**report, **result, "phase": "enabled", "dry_run": False}
 
 
@@ -207,6 +207,7 @@ def rollback(cfg, home, out, dry_run=False):
         store.save_state(state_dir, state, dry_run=dry_run)
         active["phase"] = "paused"
         if not dry_run:
-            store.write_atomic(state_dir / output.ACTIVATION_FILE, json.dumps(active))
+            raw = output.read_json(state_dir / output.ACTIVATION_FILE)
+            output.write_registration(state_dir / output.ACTIVATION_FILE, {**raw, "phase": "paused"})
         return {"phase": "paused", "pages_preserved": len(pages), "legacy_writer_restored": False,
                 "recovery": "switch forward after reconciliation; no old snapshot is restored", "dry_run": bool(dry_run)}

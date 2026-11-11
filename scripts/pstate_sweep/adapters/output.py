@@ -26,18 +26,63 @@ def read_json(path):
         return None
 
 
+PATHS_FILE = "paths.json"
+RELOCATION_FILE = "relocation.json"
+
+
+def local_output(state_dir):
+    data = read_json(Path(state_dir) / PATHS_FILE)
+    if (not isinstance(data, dict) or data.get("version") != 1
+            or not isinstance(data.get("output_root"), str) or not Path(data["output_root"]).is_absolute()):
+        raise ValueError("missing or invalid local output mapping; use sweep relocate --out")
+    return canonical(data["output_root"])
+
+
+def portable_record(token, phase=None, **extra):
+    record = {"version": 2, "state": ".", "out": ".", "token": token, **extra}
+    if phase is not None:
+        record["phase"] = phase
+    return record
+
+
+def expand_record(data, state_dir):
+    if data is not None and data.get("version") == 2:
+        if data.get("state") != "." or data.get("out") != ".":
+            raise ValueError("invalid relative writer reference")
+        return {**data, "state": canonical(state_dir), "out": local_output(state_dir)}
+    return data
+
+
+def owner_record(state_dir, out_dir):
+    raw = read_json(Path(out_dir) / OWNER_FILE)
+    check_owner_record(raw)
+    return expand_record(raw, state_dir)
+
+
+def write_registration(path, text, dry_run=False):
+    lease = _CURRENT.get()
+    path = Path(path)
+    allowed = ({lease.state_dir / name for name in (ACTIVATION_FILE, PATHS_FILE, RELOCATION_FILE)}
+               | {lease.root / OWNER_FILE}) if lease else set()
+    if (lease is None or not lease.switching
+            or (path not in allowed and path.parent != lease.state_dir / "relocations")):
+        raise RuntimeError("registration writes require the explicit ownership lease")
+    if not dry_run:
+        store.write_atomic(path, json.dumps(text, ensure_ascii=False))
+
+
 def activation(state_dir):
     data = read_json(Path(state_dir) / ACTIVATION_FILE)
     if data is not None and (not isinstance(data, dict) or type(data.get("version")) is not int
-            or data.get("version") != 1 or data.get("phase") not in ("switching", "enabled", "paused")
+            or data.get("version") not in (1, 2) or data.get("phase") not in ("switching", "relocating", "enabled", "paused")
             or any(not isinstance(data.get(k), str) or not data[k] for k in ("state", "out", "token"))):
         raise ValueError("invalid writer activation; explicit reconciliation is required")
-    return data
+    return expand_record(data, state_dir)
 
 
 def check_owner_record(owner):
     if owner is not None and (not isinstance(owner, dict) or type(owner.get("version")) is not int
-            or owner.get("version") != 1
+            or owner.get("version") not in (1, 2)
             or any(not isinstance(owner.get(k), str) or not owner[k] for k in ("state", "out", "token"))):
         raise ValueError("invalid output owner record")
 
@@ -45,11 +90,10 @@ def check_owner_record(owner):
 def validate_owner(state_dir, out_dir, enabled=True):
     state_key, out_key = canonical(state_dir), canonical(out_dir)
     active = activation(state_dir)
-    owner = read_json(Path(out_key) / OWNER_FILE)
-    check_owner_record(owner)
     if not active or (enabled and active.get("phase") != "enabled"):
         raise RuntimeError("sweep is disabled; explicit ownership switch is required before run")
-    if (not owner or owner.get("version") != 1 or active.get("out") != out_key
+    owner = owner_record(state_dir, out_key)
+    if (not owner or owner.get("version") not in (1, 2) or active.get("out") != out_key
             or owner.get("out") != out_key or owner.get("state") != state_key
             or active.get("state") != state_key or not active.get("token")
             or owner.get("token") != active["token"]):
@@ -60,10 +104,12 @@ def validate_owner(state_dir, out_dir, enabled=True):
 class OutputLease:
     """The lock location depends on physical output path, never PSTATE_HOME."""
 
-    def __init__(self, out_dir, state_dir, switching=False):
+    def __init__(self, out_dir, state_dir, switching=False, from_out=None, from_state=None):
         self.root = Path(canonical(out_dir))
         self.state_dir = Path(canonical(state_dir))
         self.switching = switching
+        self.from_out = from_out
+        self.from_state = from_state
         digest = hashlib.sha256(str(self.root).encode("utf-8")).hexdigest()
         self.lock = store.RunLock(Path(tempfile.gettempdir()) / "pstate-sweep-output-locks" / digest)
         self.context_token = None
@@ -73,11 +119,16 @@ class OutputLease:
             raise RuntimeError("nested output lease is not allowed")
         self.lock.__enter__()
         try:
-            owner = read_json(self.root / OWNER_FILE)
-            check_owner_record(owner)
-            if self.switching:
-                if owner and (owner.get("version") != 1 or owner.get("state") != str(self.state_dir)
-                              or owner.get("out") != str(self.root)):
+            if self.from_out is not None:
+                from ..relocation import inspect_move
+                inspect_move(self.state_dir, self.root, self.from_out, self.from_state)
+            elif self.switching:
+                owner = owner_record(self.state_dir, self.root)
+                active = activation(self.state_dir)
+                if active and active.get("phase") == "relocating":
+                    raise RuntimeError("relocation is incomplete; retry sweep relocate")
+                if owner and (owner.get("state") != str(self.state_dir) or owner.get("out") != str(self.root)
+                              or (owner.get("version") == 2 and (not active or owner["token"] != active["token"]))):
                     raise RuntimeError("output belongs to another state home")
             else:
                 validate_owner(self.state_dir, self.root)

@@ -128,8 +128,9 @@ def judge_sessions(state, plan, judge, max_calls, max_failures, save, log, perso
         token = summary.get("activity_version", summary["version"])
         hints = core.owner_hints(summary, personal_paths)
         request = core.make_request(identity, summary, mode, verdict=entry.get("verdict"), hints=hints)
+        request.update(platform=summary.get("platform"), paths=entry.get("paths") or ([entry["path"]] if entry.get("path") else []))
         field = "owner_error" if mode == "owner" else "error"
-        if mode == "resume" and not (summary.get("cwd") and Path(summary["cwd"]).is_dir()):
+        if mode == "resume" and getattr(judge, "requires_original_cwd", True) and not (summary.get("cwd") and Path(summary["cwd"]).is_dir()):
             entry[field] = core.record_failure(entry.get(field), "Original working directory is unavailable.",
                                                token, False, max_failures, time.time())
             failures += 1
@@ -142,6 +143,8 @@ def judge_sessions(state, plan, judge, max_calls, max_failures, save, log, perso
         except (JudgeError, ValueError) as exc:
             entry[field] = core.record_failure(entry.get(field), str(exc), token,
                                                getattr(exc, "retry", True), max_failures, time.time())
+            if getattr(judge, "backend", None):
+                entry[field]["backend"] = judge.backend
             failures += 1
             log("Judgment failed: " + identity + ": " + str(exc))
             save()
@@ -259,6 +262,13 @@ def run_sweep(cfg, judge, gate_loader, out_dir, state_dir, now=None, max_calls=N
         state = store.load_state(state_dir)
         loaded = history_loader(history_input if history_input is not None else history_options(cfg), include_excluded=True)
         refresh_sessions(state, loaded, now)
+        backend = getattr(judge, "backend", None)
+        if backend and not no_judge:
+            for entry in state["sessions"].values():
+                for field in ("error", "owner_error"):
+                    failure = entry.get(field)
+                    if failure and failure.get("backend", "claude") != backend:
+                        entry.setdefault("error_history", []).append({"field": field, **entry.pop(field)})
         save = lambda: store.save_state(state_dir, state, dry_run=dry_run)
         save()
         since_ts = cfg.get("since_ts")

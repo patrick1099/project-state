@@ -76,8 +76,9 @@ add 创建 open，追加来源不改变已有状态；新来源绝不自动重�
 - 来源资料位于 PSTATE_HOME/sweep/sources.json，永久保存摘要、判断、错误、关闭与导入旧页；原文消失标不可用，保留内容。sources 包含默认隐藏的旧完成/放弃、公司与失败来源，输出可能很大，按需本地对账。
 - review_version 是正文 hash，activity_version 含工具活动；seen 只认正文版本。旧时间戳关闭映射首次固定，新工具活动即使同时间戳也不能继承旧勾。
 - 联合页显示完整事项与待审来源。勾选只关该版本整条提醒（含未识别余部），不写状态/seen；新来源不重开 parked/dropped/done。写页前最后吸收全部页勾选，保留周归档与取消恢复语义。
-- 后台仅显式 switch 后运行，策略只改 sweep.toml。模型 safe-mode、预算、超时与失败上限沿配置；Codex 只有交互发现，不承诺后台自答。SessionStart 仍只轻提示。
+- 后台仅显式 switch 后运行，策略只改 sweep.toml。`judge.backend` 选择 Codex 或 Claude，随包优先 Codex；不静默换平台。Codex 用归一后的原生对话正文作临时只读、结构化判断，不恢复 Claude 会话；超长材料明确失败。模型、超时、调用数与失败上限沿配置，美元预算只适用于 Claude。判断平台与历史来源分开：Codex 原生历史仍只提供交互发现，不承诺原生会话 resume。SessionStart 仍只轻提示。
 - run --no-judge 不调用模型；dry-run 共用归属和写入闸，不写业务资料或页面。不同状态根对同一物理输出也互斥，不绕锁或归属拒绝。
+- 相对登记：`vault_dir = "@output"` 解析本机 `sweep/paths.json.output_root`；schema2 的 state/out 为 `.`，分别相对状态目录和映射输出根，外部绝对根仅留本机映射。目录已搬好时用 `sweep relocate --from-out <旧输出目录> --out <新输出目录> --dry-run --json` 预演，再去掉 --dry-run 执行；状态目录也搬过时加 `--from-state <旧状态目录，含 sweep>`。命令核对成对登记并保留原登记审计，不复制或删改正文。中断后同参数前向重试；旧目录仍指向另一物理目录时拒绝。不要手改登记，也不要用 switch 替代 relocate。
 - import-legacy/reconcile 读取显式旧 state/out；switch 显式启用，未知旧 run.lock 直接拒绝，不能按年龄删。rollback 吸收当前勾选后暂停，保留新数据，不恢复旧快照/旧 writer；用 switch 前向恢复。
 - 任务只从稳定活源注册，worktree/版本缓存即使 dry-run 也拒绝。明文 pyw 固定绝对 Python，无窗口并保留退出码；last_launch.log 是诊断，不是成功验收。真实计划任务触发和安装后交互 hook 需另验。
 

@@ -73,6 +73,22 @@ def load(path):
             raise ConfigError(key + " must be one relative filename")
     if cfg["page_name"] == cfg["closed_name"]:
         raise ConfigError("page_name and closed_name must differ")
+    from .adapters import judges
+    sec = raw["judge"]
+    cfg["backend"] = sec.get("backend", "claude")
+    if not isinstance(cfg["backend"], str) or cfg["backend"] not in judges.REGISTRY:
+        raise ConfigError("unknown judge.backend: " + str(cfg["backend"]))
+    for key, default in (("codex_cmd", "codex"), ("codex_model", ""), ("codex_effort", ""), ("max_input_chars", 500000)):
+        cfg[key] = sec.get(key, default)
+    try:
+        judges.validate(cfg)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+    for key in PATH_KEYS:
+        if key in cfg and cfg[key] and cfg[key] != "@output" and not Path(cfg[key]).is_absolute():
+            cfg[key] = str((Path(path).resolve().parent / cfg[key]).resolve())
+    cfg["history_roots"] = {name: [str(Path(p) if Path(p).is_absolute() else (Path(path).resolve().parent / p).resolve()) for p in paths]
+                            for name, paths in cfg["history_roots"].items()}
     cfg["since_ts"] = parse_since(cfg["since"])
     return cfg
 

@@ -431,7 +431,7 @@ class ClaudeJudgeTest(unittest.TestCase):
 class ConfigAndTaskTest(unittest.TestCase):
     def test_shipped_config_loads(self):
         cfg = config.load(ROOT / "sweep.toml")
-        self.assertTrue(cfg["vault_dir"].endswith("03-悬着的事"))
+        self.assertEqual(cfg["vault_dir"], "@output")
         self.assertNotIn("state_dir", cfg)
         self.assertIn("claude", cfg["history_roots"])
         self.assertEqual(cfg["window_days"], 7)

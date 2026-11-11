@@ -3,7 +3,7 @@
 
 [paths]
 # 「悬着的事」页和「已处理」页所在的 Obsidian 专属文件夹
-vault_dir = 'D:\Desktop\Obsidian Vault\03-悬着的事'
+vault_dir = "@output"
 page_name = "悬着的事.md"
 closed_name = "悬着的事-已处理.md"
 # 超出窗口的按周归档到 vault_dir 下的这个子目录
@@ -28,6 +28,11 @@ work_desc = "公司工作：燃气表/超声波表固件、客户需求与协议
 personal_paths = ["my-repos", "treasury-vault", "~/.claude", "Obsidian Vault", "~/.hub", "ai-room"]
 
 [judge]
+backend = "codex"
+codex_cmd = "codex"
+codex_model = ""
+codex_effort = "low"
+max_input_chars = 500000
 claude_cmd = "claude"
 # 有新鲜 recap 时只做短分类
 recap_model = "haiku"
