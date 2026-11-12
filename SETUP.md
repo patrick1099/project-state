@@ -22,9 +22,12 @@ for command in ([], ["thread"], ["sweep"]):
 |---|---|
 | Claude Code | [.claude-plugin/plugin.json](.claude-plugin/plugin.json)、[hooks/hooks.json](hooks/hooks.json) |
 | Codex | [.codex-plugin/plugin.json](.codex-plugin/plugin.json)、[hooks/codex.json](hooks/codex.json) |
+| DeepSeek Harness（DSH） | [hooks/dsh.json](hooks/dsh.json)（DSH 原生事件）；薄壳 [scripts/pstate_dsh.py](scripts/pstate_dsh.py) 只做载荷翻译 |
 | 其他宿主 | 尚无随包 hooks；手动 CLI 可用与自动会话保护可用分别验收 |
 
 通过宿主插件机制加载，完成必要的启用或信任；已有插件注册时不再重复添加全局 hooks。
+
+DSH 由 `dsh-claude-plugin-loader` 扫描插件目录、读插件自带的 `hooks/dsh.json`，并把 `${PLUGIN_ROOT}` 展开成插件绝对目录。插件同时存在 `hooks/dsh.json` 时 loader 只走原生通道，不再执行同一插件的 `hooks/hooks.json`（两套事件名与载荷不同，双跑会重复登记）。DSH 事件到共享入口的映射：`agent/created`→`hook`、`agent/inbox/inserted`→`hook-prompt`、`tools/pre-execute`→`hook-pre`、`tools/post-execute`→`hook-post`（失败由 `tool_response` 结算，也可显式 `hook-fail`）、`agent/disposed`→`hook-end`；`agent/turn-stopping` 不做检查也不释放（Stop 不是 SessionEnd）。写前互斥的身份仍按父进程链识别宿主进程 `DeepSeek Harness.exe`，不靠环境变量；`DSH_SESSION_ID` 只用于 CLI 的显式会话身份（`claim`/`take`/`release`/`link`）。MCP 子进程 `node.exe` 不作为 DSH 宿主。
 
 ## 0.10.0 事项卡片升级
 
@@ -53,7 +56,7 @@ pstate thread show <事项ID> --json
 
 权威行为见 [蓝图](docs/BLUEPRINT.md)，实现入口与边界见 [AGENTS.md](AGENTS.md)。复用 pstate_hooks、pstate_tools 的共享判断；新宿主薄壳负责输入与输出翻译。没有可信会话身份、写前阻断或完整路径信息时，不能宣称自动互斥已支持。
 
-现有 Codex Windows 结束入口使用 `scripts/pstate_end.ps1`，其他结束入口见清单；不要把耗时清理重新塞回短超时钩子。未知 shell 副作用不等于已识别完整写集合。
+现有 Codex Windows 结束入口使用 `scripts/pstate_end.ps1`，其他结束入口见清单；不要把耗时清理重新塞回短超时钩子。DSH 的 `agent/disposed` 直接调用共享 `H.end` 完成清理，不另写短回执。未知 shell 副作用不等于已识别完整写集合。
 
 ## 可选后台与计划任务
 

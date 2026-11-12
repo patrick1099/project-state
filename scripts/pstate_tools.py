@@ -8,6 +8,18 @@ from pathlib import Path
 
 NATIVE_WRITES = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 SHELL_TOOLS = {"Bash", "exec_command", "shell_command", "shell"}
+# Host-native tool names (DSH sends lowercase names). Normalize before shared analysis so an
+# unrecognized spelling can never silently degrade into a read-only call.
+TOOL_ALIASES = {"dsh": {"write": "Write", "edit": "Edit", "multiedit": "MultiEdit", "multi_edit": "MultiEdit",
+                        "notebookedit": "NotebookEdit", "notebook_edit": "NotebookEdit",
+                        "pwsh": "Bash", "bash": "Bash", "shell": "Bash"}}
+
+
+def normalize_tool(name, host="claude"):
+    base = str(name or "").rsplit(".", 1)[-1]
+    return TOOL_ALIASES.get(host, {}).get(base.lower(), base)
+
+
 PATCH_HEADERS = ("*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: ")
 READ_COMMANDS = {"echo", "printf", "pwd", "ls", "dir", "cat", "type", "head", "tail", "wc", "stat", "test",
                  "get-content", "get-childitem", "get-item", "get-location", "select-object",
@@ -228,7 +240,7 @@ def shell_intent(command, cwd, cwd_trusted=True):
 
 
 def analyze(data, host="claude"):
-    tool=str(data.get('tool_name') or '').rsplit('.',1)[-1]
+    tool=normalize_tool(data.get('tool_name'),host)
     ti=data.get('tool_input') or {}
     cwd=str(data.get('cwd') or os.getcwd())
     if tool=='apply_patch':

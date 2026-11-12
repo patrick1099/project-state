@@ -27,6 +27,18 @@
 没选的路：不手改 owner 绕过归属；不让 switch 隐式接管搬迁目录；不复制或删改会话资料；不因选用 Codex 判断而扩大后台历史来源；平台失败不静默回退。
 验证边界：全量隔离测试 295 项通过；随后新增历史路径别名场景，迁移测试 7 项通过。正式登记迁移成功，12 个业务数据文件前后 SHA-256 一致。Codex 合成归属判断真实调用通过，低推理档一次耗时 44.4 秒；模型字段留空使用 CLI 默认，显式指定 `gpt-6.1-sol` 的本机调用失败，未据此声明支持。正式会话收集与发布验收尚未完成。
 
+## 2026-11-10 0.9.5：新增 DeepSeek Harness（DSH）宿主适配
+
+**起因**：本机 AI 平台新增 DSH（desktop profile）。它的 hooks 机制与 Claude、Codex 都不同：由 dsh-claude-plugin-loader 扫描插件目录、读插件自带的 `hooks/dsh.json` 并调用命令，原生事件名与载荷键另有一套。用户要求按「新宿主薄壳负责输入与输出翻译、共享判定不动、只改适配器和注册项」补第三个平台。
+**改成**：
+- 新清单 `hooks/dsh.json`，事件严格用 `agent/created`、`agent/inbox/inserted`、`tools/pre-execute`、`tools/post-execute`、`agent/disposed`；`${PLUGIN_ROOT}` 由 loader 展开，命令同时给 `python3` 与 Windows `py -3`。插件同时有 `hooks/dsh.json` 时 loader 只走原生通道，不再跑同一插件的 `hooks/hooks.json`，避免双跑重复登记。
+- 新薄壳 `scripts/pstate_dsh.py`：把 DSH 载荷归一成共享 `pstate_hooks.begin/finish/end` 用的 data——小写工具名（write/edit/pwsh/bash）映射成共享判定认的名字、相对 workdir 锚到 payload cwd、`dsh.session_log` 作对话日志、`dsh.turn` 作 turn_id；事件→命令 `agent/created`→start、`agent/inbox/inserted`→prompt、`tools/pre-execute`→pre、`tools/post-execute`→post（失败按 `tool_response` 结算，也可显式 fail）、`agent/disposed`→end；`agent/turn-stopping` 不做事（Stop 不是 SessionEnd）。退出码 0 放行、2 阻断、1 非阻断错误，stdout 用 Claude 兼容决策 JSON。
+- `pstate_lock`：`HOST_PROCESSES["dsh"] = ("deepseek harness.exe",)` 并注释写明进程链证据；`session_key` 给 dsh 会话加 `dsh:` 前缀，`short`/`resolve_target` 同步去前缀；新增 `host_session()`——Claude/Codex 变量存在时优先，`DSH_SESSION_ID` 只在两者都缺失时才算（DSH 会把它注入所有子进程，不能让继承值把 Claude/Codex 子会话判成歧义）。
+- 注册项：`pstate.py` 钩子 `--host` 增加 dsh，抽出 `hook_start`/`hook_prompt` 供薄壳复用，`status` 与 `run` 改用 `host_session()`；`pstate_tools` 增加按宿主的工具名归一；`pstate_sessions.identity/current_identity`、`pstate_sessions_cli --platform`、`pstate_threads discover` 排除当前会话同步支持 dsh / DSH_SESSION_ID。
+- 两份 manifest 升至 0.9.5；SETUP、BLUEPRINT、AGENTS 与本记录、`evidence/dsh-0.9.5.md` 同步。
+**没选的路**：不把 `node.exe` 登记成 DSH 宿主（本机 node.exe 都是 MCP 子进程，会误认）；不在同一插件保留 Claude 兼容 + DSH 原生双通道；不靠 `DSH_SESSION_ID` 做写前身份（写前仍走进程链 identify）；本轮不猜 DSH 原生历史格式（`session.v4.jsonl.zstd`），不注册 `pstate_history.PLATFORMS["dsh"]`；不改 claude/codex 既有判定与清单语义（测试夹具只补清掉继承来的 DSH_SESSION_ID）。
+**验证边界**：全量 314 项、313 通过；唯一失败是 `test_worktree_and_version_cache_registration_refused_even_in_dryrun`——它要求从链接 worktree 运行，而本仓当前是主 worktree（`.git` 是目录），同一测试在临时链接 worktree 中通过，属既有环境差异，与本次改动无关。DSH 侧新增 31 项（载荷翻译、真 git 仓端到端、脚本级三态、清单契约）；尚未经 loader 安装后的交互钩子验收，也不代表 DSH 原生历史已支持。
+
 ## 2026-11-09 0.9.4：补齐安装与平台适配入口
 
 起因：用户要求给现有 skill 和 plugin 的安装适配说明“都补上吧”，让目标平台的 AI 能自行检查环境并完成所需接入。

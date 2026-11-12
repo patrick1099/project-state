@@ -1,5 +1,5 @@
 # 结构: vibe-scripts/standard（pstate 的锁模块，由 pstate.py 导入；本文件只有 1 配置 / 3 Core / 4 Adapter 三区）
-# 用途: 会话互斥锁——按文件相对路径的显式占用表，占用者挂在 Claude Code 会话进程上，进程没了占用就失效
+# 用途: 会话互斥锁——按文件相对路径的显式占用表，占用者挂在宿主会话进程上（Claude Code / Codex / DeepSeek Harness），进程没了占用就失效
 # 用法: 不直接运行；pstate.py 的 hook-pre / hook-post / hook-fail / hook-end 钩子与 claim / release / take / lock 子命令调用这里
 #       文件占用按仓库存 locks.json；任务认领按 Obsidian 任务目录存全局 task-claims.json，与 git 仓无关
 # 原始需求: "缺少项目记忆，或者说todo。有时候很容易冲突，和handoff"——几个会话同时干同一个个人项目时，
@@ -22,7 +22,15 @@ MUTEX_WAIT_SECONDS = 5.0
 GIT_TIMEOUT_SECONDS = 5
 INTEGRATION_BRANCHES = ("main", "master")
 CLAUDE_PROCESS_NAMES = ("claude.exe",)
-HOST_PROCESSES = {"claude": CLAUDE_PROCESS_NAMES, "codex": ("codex.exe", "codex")}
+# Host process names for session identity. dsh = DeepSeek Harness desktop: the agent host is the
+# Electron binary running app.asar/dsh, whose process name is literally "DeepSeek Harness.exe"
+# (verified 2026-11-10: the host of GUI 127.0.0.1:31099 and of every tool subprocess ancestry).
+# MCP child node.exe processes do not host agents, so node.exe is deliberately NOT listed; a
+# node-hosted dsh CLI/TUI would need its own process-chain evidence before being added.
+HOST_PROCESSES = {"claude": CLAUDE_PROCESS_NAMES, "codex": ("codex.exe", "codex"),
+                  "dsh": ("deepseek harness.exe",)}
+SESSION_PREFIXES = {"codex": "codex:", "dsh": "dsh:"}
+HOST_SESSION_ENV = (("claude", "CLAUDE_CODE_SESSION_ID"), ("codex", "CODEX_THREAD_ID"), ("dsh", "DSH_SESSION_ID"))
 BLUEPRINT_MAIN = Path("docs") / "BLUEPRINT.md"
 BLUEPRINT_SIDECAR_GLOB = "*.BLUEPRINT.md"
 WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
@@ -56,11 +64,27 @@ def is_personal(enabled, has_blueprint):
 
 
 def short(sid):
-    return (sid or "?").removeprefix("codex:")[:SHORT_ID]
+    return (sid or "?").removeprefix("codex:").removeprefix("dsh:")[:SHORT_ID]
 
 
 def session_key(host, sid):
-    return "codex:" + sid if host == "codex" and not sid.startswith("codex:") else sid
+    prefix = SESSION_PREFIXES.get(host, "")
+    return prefix + sid if prefix and not sid.startswith(prefix) else sid
+
+
+def host_session(environ=None):
+    """(host, sid) for exactly one primary host session, else (None, None).
+    DSH_SESSION_ID is inherited by every DSH-spawned child process (including a Claude/Codex
+    subprocess), so it only counts when neither Claude nor Codex session variable is present;
+    two primary variables stay ambiguous on purpose."""
+    env = os.environ if environ is None else environ
+    primary = [(host, env.get(key)) for host, key in HOST_SESSION_ENV[:2] if env.get(key)]
+    if len(primary) == 1:
+        return primary[0]
+    if primary:
+        return None, None
+    sid = env.get(HOST_SESSION_ENV[2][1])
+    return ("dsh", sid) if sid else (None, None)
 
 
 def in_family(holder, chain):
@@ -200,7 +224,7 @@ def resolve_target(st, target, me_sid):
     by_task = [sid for sid, s in st["sessions"].items() if s.get("task") == target and sid != me_sid]
     if len(by_task) == 1:
         return by_task[0]
-    by_id = [sid for sid in st["sessions"] if (sid.startswith(target) or sid.removeprefix("codex:").startswith(target)) and sid != me_sid]
+    by_id = [sid for sid in st["sessions"] if (sid.startswith(target) or sid.removeprefix("codex:").removeprefix("dsh:").startswith(target)) and sid != me_sid]
     return by_id[0] if len(by_id) == 1 else None
 
 

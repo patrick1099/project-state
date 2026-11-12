@@ -213,6 +213,8 @@ def dispatch(args, directory):
         if not isinstance(excluded, list) or any(not isinstance(s, str) for s in excluded):
             raise ThreadError('exclude_sessions must be a list of session IDs')
         current = [os.environ.get(name) for name in ('CODEX_THREAD_ID', 'CLAUDE_CODE_SESSION_ID')]
+        if not any(current):
+            current.append(os.environ.get('DSH_SESSION_ID'))
         payload['exclude_sessions'] = list(dict.fromkeys(excluded + [sid for sid in current if sid]))
         payload['seen'] = store.read(directory)['seen']
         return history().discover(payload)

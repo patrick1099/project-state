@@ -28,8 +28,8 @@ def text(value, name, optional=False):
 
 
 def identity(platform_name, session, agent='', host=None, start_dir=''):
-    if platform_name not in ('claude', 'codex'):
-        raise LinkError('平台必须是 claude 或 codex')
+    if platform_name not in ('claude', 'codex', 'dsh'):
+        raise LinkError('平台必须是 claude、codex 或 dsh')
     return {'host': text(platform.node() if host is None else host, '主机'),
             'platform': platform_name, 'session': text(session, '会话号'),
             'agent': text(agent, 'agentId', True), 'start_dir': text(start_dir, '起始目录', True)}
@@ -41,10 +41,10 @@ def current_identity(platform_name=None, session=None, agent=None, environ=None)
         if platform_name is None or session is None:
             raise LinkError('--platform 和 --session 必须一起提供')
         return identity(platform_name, session, agent or '')
-    candidates = [(p, env.get(k)) for p, k in (('claude', 'CLAUDE_CODE_SESSION_ID'), ('codex', 'CODEX_THREAD_ID')) if env.get(k)]
-    if len(candidates) != 1:
+    host, sid = L.host_session(env)
+    if not host:
         raise LinkError('会话环境变量同时存在或均不存在；请显式提供 --platform 和 --session')
-    return identity(*candidates[0], agent=agent or '')
+    return identity(host, sid, agent=agent or '')
 
 
 def key(row):

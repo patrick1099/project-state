@@ -21,7 +21,7 @@
 - 多事项录入用 sweep review 冻结输入，逐项保存并独立回读，完整成功最后 seen；失败先查回执与实际库，再原输入重放，不重新起名或盲加 distinct。
 - 输出归属闸设在实际写/删函数内，预演走同路径。模型调用在事项短锁外；输出物理路径互斥覆盖整轮。不得绕过归属或拿旧快照覆盖切换后的决定。
 - session-sweep 旧仓入口全部拒绝执行；唯一新 runner 在稳定活源根。install-task 拒绝 worktree/插件版本缓存，run_hidden.pyw 必须保持明文、固定绝对解释器并传回退出码。
-- Claude 钩子在 hooks/hooks.json；Codex 在 hooks/codex.json。共享裁决在 pstate_hooks.py，输入分析在 pstate_tools.py；Codex 原生 exec_command 可能归一为 Bash，清单必须同时匹配。写前异常闭锁，诊断在 PSTATE_HOME/hook-diagnostics；其他事件报错但不拦工具。shell 写入集合不明且相关个人仓有他人活锁时拒绝，改用 pstate run --write 声明全部目标；不按全局别仓的锁阻断。
+- Claude 钩子在 hooks/hooks.json；Codex 在 hooks/codex.json；DSH 在 hooks/dsh.json（原生事件，loader 见 dsh.json 时只走原生通道，载荷翻译在 scripts/pstate_dsh.py）。共享裁决在 pstate_hooks.py，输入分析在 pstate_tools.py；Codex 原生 exec_command 可能归一为 Bash，清单必须同时匹配；DSH 工具名小写（write/edit/pwsh），由适配器归一。DSH 宿主进程名是 `DeepSeek Harness.exe`；`node.exe` 只是 MCP 子进程，不登记为宿主。写前异常闭锁，诊断在 PSTATE_HOME/hook-diagnostics；其他事件报错但不拦工具。shell 写入集合不明且相关个人仓有他人活锁时拒绝，改用 pstate run --write 声明全部目标；不按全局别仓的锁阻断。
 - PATH shim 指向金库活源，插件钩子指向缓存。发布时两份 manifest 同步升级、推子仓并 hub sync --refresh；不能把 CLI 回读当安装后交互钩子验收。
 
 ## 易错点
@@ -29,6 +29,7 @@
 - .py 受 Esafenet 保护，读搜改用 esafe-code；.pyw 保持明文。复杂输入用 UTF-8 --input-file 或 stdin，程序调用用参数数组。
 - `thread sync-cards --dry-run --json` 预演回填，`edit-card ID --rev N --input-file edits.json` 使用 `expected_sha256` 与 exact edits；set 可在 JSON 带同名 hash，无专用 CLI flag。未配置输出、卡片缺失或部分失败必须分别核对库与卡，不能报已完整记下。
 - 0.10.0 在 schema1 事项中增加 card_ref；0.9.8 严格校验会拒读新库。先更新全部宿主缓存、CLI 活源与后台入口，再回填；恢复旧库及卡片需明确处理，不混用版本或静默重建。
+- DSH 写前互斥的身份只来自父进程链上的 `DeepSeek Harness.exe`；`DSH_SESSION_ID` 只给 CLI 显式身份，hook-pre 不靠它。DSH 原生历史是 `session.v4.jsonl.zstd`，本轮未做发现适配，不要猜格式。
 - 不手改正式 threads/sources；损坏、未知 schema、备份恢复都需明确处理。rev 冲突先重读；replaced_unverified 先核落库，不能盲重试。
 - discover 的 limit/max_chars 只限制返回页，roots 每次读全部所选 JSONL；精确抽样用 files。旧时间戳勾选只映射首次来源版本，不能让同时间戳的新工具活动继承旧勾。
 - 个人仓先开 worktree 再改；不加 AI 署名。普通文档任务只改获派 MD，保留 HANDOFF 的已谈定和机器区。

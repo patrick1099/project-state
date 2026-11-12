@@ -59,7 +59,7 @@
 - 历史发现：给 Claude/Codex 本地历史范围 → 返回有界纯正文、原生消息来源、内容版本、覆盖统计和续页游标。当前 AI 阅读、筛选、拆分与归并后 add；用户看可继续的卡片，不逐页筛原文。交互 discover 不做语义判断、不另调模型；后台判断单独显式启用，不自动全量导入事项。
 - 来源与时效：保留原话的来源平台、会话、锚点、时间、角色、摘录及哈希；来源核验失败明确标未核验。核验只证明原话出处，不证明其授权含义。AI 建议单独标识；历史卡可保留带时间和来源的当时停点，声称当前现状或真正恢复执行前才由当前 AI 查 Git、成果和 HANDOFF。历史 stopped_at 必须带截至时间，不能冒充当前进度。
 - 卡片跟着现状走：卡片常在会话中途记下，同一会话随后把事做完或推进。当前会话是 open/decided 卡的来源时，每轮开头提醒 AI：做完就自己 done（带证据）、有进展就 set，改了告诉用户；回顾时 list/show 对来源会话在卡片最后更新后又有用户消息的卡标 possibly_stale。AI 判断完成不需用户先开口；do/later/drop/reopen 仍要用户原话。没经过 continue 接手、在别的会话里直接做掉的事两者都抓不到，声称现状前照旧核 Git、成果和 HANDOFF。
-- 接手登记：只有 continue 把当前会话（CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID 恰有一个时取）最近一条用户消息追加为来源；set 不登记（回顾时顺手改卡的会话不该变成来源，否则它之后聊别的事会让卡片反复标过期、每轮收到无关提醒）。用户消息含 Codex 旧格式日志里的那种：登记的来源只说明“谁在干这件事”，不当用户确认用，核验原话仍只认原生。“最近一条”按时间解析后取最晚。条件：卡为 open/decided、本会话尚非来源；成功则 rev+1，log 记 append_sources（via=pickup）。在同一把事项锁内重读状态再写，不需外部 rev。日志按会话号直接定位，同会话的全部日志一起读（Claude `projects/*/<sid>.jsonl`；Codex `sessions`、`archived_sessions` 下 `rollout-*-<sid>.jsonl[.zst]`），不走 discover（它排除当前会话）。认不出会话、找不到日志、没有用户消息或写入失败时不登记、不让命令失败，回执 session_linked {linked, reason} 说明；替换后读回失败（commit_status=replaced_unverified）时 linked 与 committed 都报 null，不冒充未写，先 show 核对。登记后该会话与原来源同等：每轮提醒、回顾时查其日志。登记那条消息若同时提了另一件事，另记时 add 要加 --distinct（同锚点）。不改 schema。
+- 接手登记：只有 continue 把当前会话（CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID / DSH_SESSION_ID 恰有一个时取）最近一条用户消息追加为来源；set 不登记（回顾时顺手改卡的会话不该变成来源，否则它之后聊别的事会让卡片反复标过期、每轮收到无关提醒）。用户消息含 Codex 旧格式日志里的那种：登记的来源只说明“谁在干这件事”，不当用户确认用，核验原话仍只认原生。“最近一条”按时间解析后取最晚。条件：卡为 open/decided、本会话尚非来源；成功则 rev+1，log 记 append_sources（via=pickup）。在同一把事项锁内重读状态再写，不需外部 rev。日志按会话号直接定位，同会话的全部日志一起读（Claude `projects/*/<sid>.jsonl`；Codex `sessions`、`archived_sessions` 下 `rollout-*-<sid>.jsonl[.zst]`），不走 discover（它排除当前会话）。认不出会话、找不到日志、没有用户消息或写入失败时不登记、不让命令失败，回执 session_linked {linked, reason} 说明；替换后读回失败（commit_status=replaced_unverified）时 linked 与 committed 都报 null，不冒充未写，先 show 核对。登记后该会话与原来源同等：每轮提醒、回顾时查其日志。登记那条消息若同时提了另一件事，另记时 add 要加 --distinct（同锚点）。不改 schema。
 - 归并与幂等：重复收录相同标题及来源可返回已有 ID；同锚点拆成不同事项须明确 --distinct，追加到已有事项用 --into ID --rev N，且仅追加来源。改当前正文走 edit-card；set 兼容仍可精确匹配的结构字段。新来源不能重开 parked/dropped/done/transferred；同名仅提供相似提示，不自动合并。
 - 四个选择：continue 返回卡片、状态不变，并做接手登记（登记成功时版本+1，可 --dry-run，不接 --rev/--input-file）；do → decided，仅记录决定，不创建任务或执行工作；later → parked，默认隐藏但 list --all/--state parked 可找回；drop → dropped，保留决定记录。do/later/drop 需要用户原话及来源。
 - 转交前由当前 AI 读取 card.body，将当前目标、结论、未定问题与人工补充承接进目标任务文档并回读；不能仅复制旧 JSON 快照。转交后原卡保留正文，顶部显示已转交和任务链接，施工进度归任务 HANDOFF。
@@ -120,7 +120,7 @@
 - 不按超时自动释放、不自动接手：对话日志时间只说明它多久没动。
 - 后台只在显式切换后按配置运行，不暗调额外模型、不做 GUI、不增加 API/BYOK、不自动执行事项或全量导入事项。
 - 不进 git、不进 hub 长期记忆；不做跨机器同步。
-- 文件锁与任务认领按已接入宿主提供；具体能力及已验证范围见第 6 节，未接入的宿主不据此获得支持声明。
+- 文件锁与任务认领覆盖 Claude Code、Codex 与 DeepSeek Harness（DSH）；DSH 由 hooks/dsh.json 原生事件经 scripts/pstate_dsh.py 翻译，写前身份仍取进程链（宿主进程名 `DeepSeek Harness.exe`），原生历史发现尚未适配（`session.v4.jsonl.zstd` 无格式契约）。
 - 会话登记只记经过 claim / take / transfer / link 的会话；漏登记的工作不会被自动补上，登记也只证明“关联过”，不证明实际完成了工作。
 - 0.10.0 卡片升级：schema1 增加受控 card_ref，旧 0.9.8 严格 schema 校验会拒读含此字段的库。先更新全部宿主缓存、CLI 活源及后台入口，再 sync-cards 回填；不能让旧版继续读写新库。回退或恢复备份须明确处理库与卡片的对应关系，不能只换回旧程序或悄悄恢复旧快照。
 - 版本切换：新状态 transferred 与认领表只有 0.5.0 起认得。两平台 manifest、插件缓存、稳定活源与后台一起发布；旧版读到含 transferred 的事项库会拒绝读（不会改坏）。旧版写在 locks.json 的看板认领在 0.5.0 里被忽略。`会话.md` 登记、`link` 命令与 Codex `.jsonl.zst` 历史读取从 0.6.0 起才有。
@@ -131,7 +131,7 @@
 - 任务↔会话关联只存在任务目录 `会话.md` 的受管区，不另建全局关联库；受管区损坏绝不当空表重建。
 - 锁的身份挂在会话进程上（进程号 + 进程创建时间），不靠手写认领；"检查冲突 + 登记占用"必须原子。
 - 撞上占用必须拦下（不是只提醒），并给出能让用户做决定的信息。
-- 非写前钩子出错返回非阻断错误并留下诊断，不拦工具；写前检查出错一律闭锁拒绝并留 hook-diagnostics。
+- 非写前钩子出错（参数错、超时、锁文件忙、认不出会话）按非阻断错误返回，不拦工具、不挡住会话；写前钩子出错一律闭锁拒绝并留 hook-diagnostics（0.9.0 起的 `pstate_hooks.begin` / `run_as_hook`）。
 - 判断平台以一份注册表选择、每平台独立适配；增删平台不改扫描、去重和页面规则，一个平台的调用失败不触发另一个平台。
 - 卡片读写沿用输出映射、归属与物理路径互斥；同时需要输出锁和事项锁时先输出锁后事项锁。正文未命中精确编辑条件不得覆盖，用户自由手补不改变来源核验结果。
 - 只用 Python 标准库。
@@ -173,9 +173,12 @@
 - 出错时：闭锁拒绝本次写入，留下 hook-diagnostics；不能换工具绕过。
 - 平台缺这项能力时：锁不生效；`claim` 只能作软约束。
 
+DSH 原生事件映射：`agent/created`→`hook`、`agent/inbox/inserted`→`hook-prompt`、`tools/pre-execute`→`hook-pre`、`tools/post-execute`→`hook-post`（失败按 `tool_response` 结算失败）、`agent/disposed`→`hook-end`；`agent/turn-stopping` 不做检查也不释放。插件同时有 `hooks/dsh.json` 时 loader 只走原生通道。
+
 | 平台 | 能力范围 | 支持状态 / 降级表现 | 已验证范围 |
 |---|---|---|---|
 | Claude Code | 会话开始注入 + 每轮来源卡提醒 + 写入前裁决 + skill | 已支持 | 2026-10-09：单元 + 真 git 端到端（假进程后端）22 条；真实 headless 会话经钩子被拦下并照提示停下问用户、`take` 后重试成功、会话结束后占用释放；真实进程链认出会话进程。尚未经插件安装后的交互会话验证。0.5.0：全局任务认领、带 --cwd 的接手提示、旧看板停用、转交，单元＋真 git 端到端（假进程后端）通过，同样未经安装后交互会话验证。0.6.0：会话登记（claim/take/link/transfer、并发、损坏拒写、zst 历史）全量单元 237 条通过，临时 PSTATE_HOME 下真实 CLI 冒烟通过；未经安装后交互会话验证。0.7.0：来源卡提醒与 possibly_stale 新增单元 3 条通过，正式事项库只读冒烟（T04 卡被标过期、提醒只注入来源会话）；安装后交互钩子未观察。0.8.0：接手登记新增单元 3 条通过（含 Codex rollout 定位），临时 PSTATE_HOME 下用真实会话日志冒烟；安装后交互会话未观察。0.8.1：新增与改写单元 9 条，全量 250 条（仅既有 2 条 junction 测试失败）；临时 PSTATE_HOME 下真实冒烟：本会话、Claude Desktop 会话 continue 均登记，每轮提醒注入；正式库只读 list 3 张卡 1.55 秒；安装后交互会话未观察 |
 | Codex | 会话开始与来源卡提醒 + 原生写前裁决 + 结束回执 + skill | 文件锁及 claim/take/release 已适配 | 0.9.0：原生同 PID 两线程、真实 shell 写入与冲突、结束回执/下一次裁决清旧锁通过；workdir 缺失时拒绝相对写入。宿主 3 秒结束预算及失败回执边界见 evidence/hooks-0.9.0.md。成功 apply_patch 仍只有行为回归，未冒称宿主验收；0.9.0 已正式部署，安装缓存与活源明文哈希一致，见部署记录。 |
+| DeepSeek Harness（DSH，desktop） | 会话开始注入与来源卡提醒 + 原生写前裁决 + 结束清理 + skill | hooks/dsh.json 原生事件经 scripts/pstate_dsh.py 翻译；写前身份取进程链 `DeepSeek Harness.exe`；原生历史发现未适配 | 0.9.5：DSH 载荷翻译、真 git 仓端到端（假进程后端）31 条与脚本级放行/拒绝/恢复三态通过；真实进程链证据见 evidence/dsh-0.9.5.md；loader 安装后的交互钩子尚未验收 |
 | Claude / Codex 本地历史与全局事项 | thread CLI、纯正文提取、来源核验及选择 | CLI 可脱离 Git；历史覆盖限本地可读样式 | merge-b1 独立验收 P 全仓 200/200、CLI 契约 7/7；合成迁移、冻结录入、双版本、真实跨进程与 Windows junction、隐藏入口均通过约定范围。S 47/47 独立验收且复验指纹未变。0.4.0 已发布并刷新两平台缓存，新进程 CLI 通过；正式导入/对账/切换及原资料保全经独立验收。安装后新宿主交互 hook 尚未观察 |
 | Windows 后台与正式联合页 | 稳定隐藏入口、唯一写者与计划任务 | 已显式启用，保留原配置的登录/每4小时触发、IgnoreNew 与1小时限时 | merge-b2：隔离恢复链路13步、正式 no-judge 及隐藏入口通过；真实任务手动触发后自然完成，默认模型调用20次、失败0，任务 Ready/enabled/LastTaskResult0；运行中重入未产生新 writer。原168条来源、15条关闭映射、7页全文及原路径保全，threads/seen与旧state不变。未来自然登录/4小时重复触发未观察；详见 evidence/merge-b2/independent-audit.md |

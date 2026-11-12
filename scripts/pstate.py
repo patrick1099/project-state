@@ -2,6 +2,7 @@
 # 用途: 会话互斥——同一仓库所有 worktree 共用的文件占用锁 ＋ 全局的 Obsidian 任务认领（谁在干哪件事）；旧待办看板只读兼容
 # 用法: py -3 pstate.py status | claim <任务目录> | release | take <会话号|任务目录> | lock on|off|auto
 #       | done <旧条目短名> | path | hook / hook-prompt / hook-pre / hook-post / hook-fail / hook-end（钩子，读 stdin）
+#       DSH 原生事件由 scripts/pstate_dsh.py 翻译后调用同一套钩子（--host dsh）
 # 原始需求: "缺少项目记忆，或者说todo。有时候很容易冲突，和handoff"。几个会话同时干同一个个人项目时互斥：
 #           同时改同一批文件、同一件事做两遍，撞上就拦下由 AI 问用户；外加待办看板。进度正文写项目的 HANDOFF，不写这里。
 #           只管个人项目（公司仓不加锁、不新建条目）；状态放仓库外本机目录（按 git common dir 识别同一仓库）。
@@ -298,19 +299,24 @@ def personal_repo(top, sdir):
     return L.is_personal(L.load_state(sdir)["enabled"], L.has_blueprint(top, Path(top) / "_"))
 
 
+def env_session():
+    """恰好一个宿主会话环境时返回 (host, sid)，否则 (None, "")；只用于显示，不做身份核对。"""
+    host, sid = L.host_session()
+    return (host, sid) if host else (None, "")
+
+
 def current_host_session():
-    candidates = [(host, os.environ.get(key)) for host, key in
-                  (("claude", SESSION_ENV), ("codex", "CODEX_THREAD_ID")) if os.environ.get(key)]
-    if len(candidates) != 1:
-        raise RuntimeError("需要唯一的 Claude/Codex 会话环境，不能同时存在或均缺失")
-    return candidates[0]
+    host, sid = L.host_session()
+    if not host:
+        raise RuntimeError("需要唯一的 Claude/Codex/DSH 会话环境，不能同时存在或均缺失")
+    return host, sid
 
 
 def me_from_env(backend):
     host, sid = current_host_session()
     me, chain = L.identify(backend, sid, host=host)
     if not me:
-        raise RuntimeError("认不出当前 Claude/Codex 会话进程")
+        raise RuntimeError("认不出当前 Claude/Codex/DSH 会话进程")
     return me, chain
 
 
@@ -333,8 +339,8 @@ def build_status(cwd, me_sid=""):
 
 
 def cmd_status(args):
-    sid = os.environ.get(SESSION_ENV, "") or L.session_key("codex", os.environ.get("CODEX_THREAD_ID", ""))
-    text, *_ = build_status(args.cwd, sid)
+    host, raw = env_session()
+    text, *_ = build_status(args.cwd, L.session_key(host, raw) if host else "")
     print(text)
     return 0
 
@@ -512,28 +518,35 @@ def hook_context(cwd, me_sid):
     return render_hook("\n".join(lines), self_cmd())
 
 
-def cmd_hook(args):
-    data = read_hook_input()
-    host = getattr(args, "host", "claude")
+def hook_start(data, host="claude"):
+    """SessionStart：先处理结束回执，再只注入状态提示；不扫描历史、不调模型。"""
+    home = state_home()
     sid = L.session_key(host, data.get("session_id", ""))
-    if L.E.is_ended(state_home(), sid):
-        H.end(data, state_home(), host)
+    if L.E.is_ended(home, sid):
+        H.end(data, home, host)
     cwd = data.get("cwd") or os.getcwd()
     event = data.get("hook_event_name") or "SessionStart"
-    parts = [p for p in (hook_context(cwd, L.session_key(getattr(args, "host", "claude"), data.get("session_id", ""))), global_thread_hint()) if p]
+    parts = [p for p in (hook_context(cwd, sid), global_thread_hint()) if p]
     if parts:
         emit(event, additionalContext="\n".join(parts))
     return 0
 
 
-def cmd_hook_prompt(args):
+def hook_prompt(data):
     """UserPromptSubmit：本会话记过的待续卡，每轮提醒 AI 做完就 done、有进展就 set。"""
     from pstate_threads.store import session_reminder
-    data = read_hook_input()
     text = session_reminder(state_home(), data.get("session_id") or "", thread_cmd(), MAX_INJECT)
     if text:
         emit(data.get("hook_event_name") or "UserPromptSubmit", additionalContext=text)
     return 0
+
+
+def cmd_hook(args):
+    return hook_start(read_hook_input(), getattr(args, "host", "claude"))
+
+
+def cmd_hook_prompt(args):
+    return hook_prompt(read_hook_input())
 
 
 def cmd_hook_pre(args):
@@ -593,7 +606,7 @@ def build_parser():
                        ("hook-post", "PostToolUse 钩子"), ("hook-fail", "PostToolUseFailure 钩子"),
                        ("hook-end", "SessionEnd 钩子")):
         p = sub.add_parser(name, help=f"{desc}（读 stdin JSON）")
-        p.add_argument("--host", choices=("claude", "codex"), default="claude")
+        p.add_argument("--host", choices=("claude", "codex", "dsh"), default="claude")
     return ap
 
 

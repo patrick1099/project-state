@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 import pstate_hooks as H
 import pstate_disk as D
+import pstate_lock as L
 
 HELP = """---
 name: pstate-run
@@ -81,9 +82,8 @@ def main(argv,cwd,home,state_dir_for,command):
             else:child=json.loads(Path(args.command_file).read_text(encoding='utf-8'))
         if not isinstance(child,list) or not child or any(not isinstance(x,str) or not x for x in child):
             raise ValueError('command 必须是非空字符串数组')
-        candidates=[(h,os.environ.get(k)) for h,k in (('claude','CLAUDE_CODE_SESSION_ID'),('codex','CODEX_THREAD_ID')) if os.environ.get(k)]
-        if len(candidates)!=1:raise RuntimeError('需要唯一的 Claude/Codex 会话环境')
-        host,sid=candidates[0]
+        host,sid=L.host_session()
+        if not host:raise RuntimeError('需要唯一的 Claude/Codex/DSH 会话环境')
         data={'session_id':sid,'turn_id':'explicit-run','tool_use_id':uuid.uuid4().hex,'cwd':cwd,
               'tool_name':'MultiEdit','tool_input':{'edits':[{'file_path':p} for p in args.write]}}
         output=io.StringIO()

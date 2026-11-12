@@ -25,9 +25,9 @@ Use subprocess.run([python_path, script_path, "link", task, "--platform", "codex
 Register current, historical or delegated sessions explicitly against an existing .../task/Tnn-name directory.
 
 ## Command Reference
-link TASK [--platform claude|codex --session ID [--agent ID]] [--reason TAG]
+link TASK [--platform claude|codex|dsh --session ID [--agent ID]] [--reason TAG]
 --platform and --session must be supplied together and override the environment.
-Otherwise exactly one of CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID must be present.
+Otherwise exactly one of CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID / DSH_SESSION_ID must be present.
 --reason is repeatable; --reason - reads UTF-8 stdin for free text.
 --json and --format json return the ok/data/error/meta envelope. --dry-run previews the same write path.
 
@@ -48,7 +48,7 @@ E_IO/E_PERMISSION: inspect the file and repair malformed managed regions manuall
         return 0
     ap = Parser(prog='pstate link', epilog="LLMs/agents: run 'pstate link --ai-help' for usage guidance.")
     ap.add_argument('task')
-    ap.add_argument('--platform', choices=('claude', 'codex'))
+    ap.add_argument('--platform', choices=('claude', 'codex', 'dsh'))
     ap.add_argument('--session')
     ap.add_argument('--agent')
     ap.add_argument('--reason', action='append', default=[])

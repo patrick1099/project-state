@@ -31,7 +31,7 @@ class SessionLinks(unittest.TestCase):
         self.task.mkdir(parents=True)
         self.path = self.task / '会话.md'
         self.env = {**os.environ, 'PSTATE_HOME': str(self.home)}
-        for name in ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID'):
+        for name in ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'DSH_SESSION_ID'):
             self.env.pop(name, None)
         self.who = S.identity('codex', 'test-session', host='local-test')
 

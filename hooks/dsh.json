@@ -1,0 +1,68 @@
+{
+  "description": "Shared session reminders and pre-write file reservations for DeepSeek Harness (DSH).",
+  "hooks": {
+    "agent/created": [
+      {
+        "matcher": "^(startup|resume|clear|compact)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate_dsh.py\" start",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate_dsh.py\" start",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "agent/inbox/inserted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate_dsh.py\" prompt",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate_dsh.py\" prompt",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "tools/pre-execute": [
+      {
+        "matcher": "^(write|edit|multiedit|multi_edit|notebookedit|notebook_edit|apply_patch|pwsh|bash|shell)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate_dsh.py\" pre",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate_dsh.py\" pre",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "tools/post-execute": [
+      {
+        "matcher": "^(write|edit|multiedit|multi_edit|notebookedit|notebook_edit|apply_patch|pwsh|bash|shell)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate_dsh.py\" post",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate_dsh.py\" post",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "agent/disposed": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/pstate_dsh.py\" end",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}/scripts/pstate_dsh.py\" end",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
