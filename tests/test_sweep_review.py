@@ -111,18 +111,21 @@ class FrozenReviewTest(unittest.TestCase):
 
     def test_independent_readback_failure_never_marks_seen_and_replays(self):
         real = store.read
-        count = 0
+        real_readback = review._readback
+        failed = False
 
-        def fail_readback(*args):
-            nonlocal count
-            count += 1
-            if count == 2:
-                raise OSError("independent readback failed")
-            return real(*args)
+        def fail_readback(state, entry, ident):
+            nonlocal failed
+            self.assertIn(ident, real(self.directory)["items"])
+            if not failed:
+                failed = True
+                raise OSError("independent readback failed after persisted capture")
+            return real_readback(state, entry, ident)
 
-        with patch.object(store, "read", side_effect=fail_readback):
-            with self.assertRaises(ThreadError):
+        with patch.object(review, "_readback", side_effect=fail_readback):
+            with self.assertRaises(ThreadError) as failure:
                 review.review(self.home, self.plan())
+        self.assertEqual(failure.exception.details["phase"], "capture_readback")
         self.assertEqual(len(real(self.directory)["items"]), 1)
         self.assertEqual(real(self.directory)["seen"], {})
         result = review.review(self.home, self.plan())

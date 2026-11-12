@@ -16,8 +16,10 @@ HELP = {
     'commands': {
         'add': 'title, sources required; optional motivation/confirmed/questions/stopped_at/next_suggestion/paths/handoff; --distinct or --into ID --rev N',
         'list': 'default open/decided; --all or --state parked; always includes counts; open/decided cards carry followups/possibly_stale',
-        'show': 'show ID, including sources, decision log, HANDOFF filesystem facts and source-session followups with the latest follow-up message texts',
-        'set': 'set ID --rev N; structured editable fields only, cannot set state',
+        'show': 'show ID, including the full current card.body and card.sha256, sources, decision log, HANDOFF facts and latest follow-up texts',
+        'sync-cards': 'backfill existing matters into Obsidian cards; idempotent, supports --dry-run',
+        'edit-card': 'edit-card ID --rev N --input-file PATH; expected_sha256 + edits [{old,new,count?}], preserving all other card text; supports --dry-run',
+        'set': 'set ID --rev N; structured editable fields only, preserving manual card text; optional expected_sha256 guards against concurrent card edits; cannot set state',
         'choose': 'choose ID continue|do|later|drop; continue takes only ID (and --dry-run), keeps the state, picks the card up for the current session (session_linked) and returns followups; others require --rev N, said/source JSON',
         'done': 'done ID --rev N; evidence (nonempty string list); optional said/source, otherwise actor=assistant',
         'reopen': 'reopen ID --rev N; said/source; explicit reopening of parked/dropped/done/transferred (clears transferred_to)',
@@ -29,7 +31,7 @@ HELP = {
     'decisions': 'said is a verbatim user quotation contained in source.excerpt. Verification checks origin, never intent. Unverified origins return confirmed=false.',
     'options': ['--json', '--format json', '--dry-run (mutations)', '--ai-help'],
     'exits': {'0': 'success', '1': 'operational error/conflict', '2': 'invalid usage'},
-    'safety': 'transfer writes task session links after committing the thread; do creates no files. New sources never reopen a closed item. No extra model calls.'}
+    'safety': 'remembering creates an Obsidian matter card; its editable body is authoritative. Card text and page checkboxes never authorize lifecycle decisions. transfer writes task session links after committing the thread; do creates no execution task. New sources never reopen a closed item. No extra model calls.'}
 TASK_DIR = re.compile(r'^T\d+')
 
 
@@ -45,6 +47,8 @@ ai_help_version: 1
 - `pstate thread list --json`
 - `pstate thread add --input-file item.json --dry-run --json`
 - `pstate thread choose ID continue --json`
+- `pstate thread sync-cards --dry-run --json`
+- `pstate thread edit-card ID --rev N --input-file edits.json --dry-run --json`
 Use `subprocess.run([python_path, script_path, "thread", "add", "--input-file", input_path, "--json"])` with list argv; never interpolate free text into shell command strings.
 
 ## When to Use
@@ -56,7 +60,8 @@ Recall unfinished conversations and let the user decide what to continue. Works 
 Required source fields: platform/session/anchor/time/role/excerpt/excerpt_hash; optional path/host/agentId/start_dir.
 excerpt_hash is SHA-256 of UTF-8 excerpt. An item's sources identify exact original messages.
 Complex fields use --input-file PATH or --input-file - (stdin); omitted input reads piped stdin except discover defaults to {}.
-set requires --rev; choices other than continue require --rev and said/source. done requires --rev and evidence, with optional said/source.
+set requires --rev; expected_sha256 from show/continue optionally rejects any intervening manual edit; changes to an edited generated field are always rejected. Choices other than continue require --rev and said/source. done requires --rev and evidence, with optional said/source.
+show/continue return card.path, the complete current card.body and its UTF-8 SHA-256 in card.sha256. Users may edit the whole body freely. Structured set updates preserve unrelated manual text; edit-card applies exact old/new/count replacements with expected_sha256 and --rev. On a stale hash, reread the card and reassess instead of overwriting it. sync-cards backfills old matters idempotently; --dry-run previews through the same write path.
 next_suggestion is text and is stored with an AI marker. confirmed is a list of {said, source}; each quotation is verified against its original message when available.
 paths, handoff and questions are lists of strings. title/motivation/stopped_at are text.
 list/show/continue add last_touched (time of the latest content event; a pick-up registration does not count) and, for open/decided cards, followups: per source session, user messages (Codex legacy format included) newer than both last_touched and that session's latest source on the card. show also attaches the latest follow-up texts (messages, each clipped). possibly_stale=true means the source session kept going after the card was written: read those messages, then done (with evidence) or set the card yourself and tell the user.
@@ -65,7 +70,8 @@ All business commands support --json or --format json. list defaults to open/dec
 --ai-help and --help print documentation, not business JSON envelopes, including when --json is present.
 
 ## Side Effects & Safety
-add/set/choose/done/reopen/seen update the global threads database under PSTATE_HOME; choose continue writes only the pick-up source, rev and an append_sources log event (via=pickup).
+add/set/choose/done/reopen/seen update the global threads database under PSTATE_HOME; matter mutations also synchronize card lifecycle metadata and targeted field changes while preserving manual body text. choose continue appends the pick-up source, rev and an append_sources log event (via=pickup).
+sync-cards creates missing legacy cards; edit-card changes only the specified text after checking rev and expected_sha256. Neither card body text nor a page checkbox is a user decision or authorization.
 All those mutations support --dry-run through the same transaction path; only a coordination lock directory/file may be created, never business state.
 list/show read state; show/continue inspect HANDOFF metadata without executing or changing its contents.
 discover reads requested local history and optional session-sweep state; it does not call a model, write history or automatically mark seen.
@@ -111,16 +117,16 @@ def parser():
     for name in HELP['commands']:
         command = sub.add_parser(name)
         common(command)
-        if name in ('show', 'set', 'choose', 'done', 'reopen', 'transfer'):
+        if name in ('show', 'set', 'choose', 'done', 'reopen', 'transfer', 'edit-card'):
             command.add_argument('id')
         if name == 'choose':
             command.add_argument('choice', choices=('continue', 'do', 'later', 'drop'))
-        if name in ('add', 'set', 'choose', 'done', 'reopen', 'seen', 'transfer'):
+        if name in ('add', 'set', 'choose', 'done', 'reopen', 'seen', 'transfer', 'sync-cards', 'edit-card'):
             command.add_argument('--dry-run', action='store_true')
-        if name in ('add', 'set', 'choose', 'done', 'reopen', 'transfer'):
-            command.add_argument('--rev', type=int, required=name in ('set', 'done', 'reopen', 'transfer'))
-        if name in ('add', 'set', 'choose', 'done', 'reopen', 'seen', 'discover', 'transfer'):
-            input_option(command)
+        if name in ('add', 'set', 'choose', 'done', 'reopen', 'transfer', 'edit-card'):
+            command.add_argument('--rev', type=int, required=name in ('set', 'done', 'reopen', 'transfer', 'edit-card'))
+        if name in ('add', 'set', 'choose', 'done', 'reopen', 'seen', 'discover', 'transfer', 'edit-card'):
+            input_option(command, required=name == 'edit-card')
         if name == 'add':
             group = command.add_mutually_exclusive_group()
             group.add_argument('--into')
@@ -181,16 +187,23 @@ def dispatch(args, directory):
         state = store.read(directory)
         readers = log_readers()
         if command == 'show':
-            return {'item': annotate(store.card(get_item(state, args.id)), *readers, with_text=True)}
+            return {'item': annotate(store.card(get_item(state, args.id), directory), *readers, with_text=True)}
         wanted = STATES if args.all else ((args.state,) if args.state else ('open', 'decided'))
-        return {'items': [annotate(store.card(item), *readers) for item in state['items'].values() if item['state'] in wanted],
+        return {'items': [annotate(store.card(item, directory), *readers) for item in state['items'].values() if item['state'] in wanted],
                 'counts': store.counts(state)}
+    if command == 'sync-cards':
+        return store.sync_cards(directory, dry_run=args.dry_run)
+    if command == 'edit-card':
+        result = store.edit_card(directory, args.id, args.rev, read_input(args.input_file), dry_run=args.dry_run)
+        if isinstance(result.get('item'), dict) and 'card' not in result['item']:
+            result['item'] = store.card(result['item'], directory)
+        return result
     if command == 'choose' and args.choice == 'continue':
         if args.input_file or args.rev is not None:
             raise ThreadError('continue accepts only the thread ID and --dry-run')
         item = get_item(store.read(directory), args.id)
         linked, updated, committed = pick_up(directory, item, history, args.dry_run)
-        return {'item': annotate(store.card(updated or item), *log_readers()), 'action': 'continue',
+        return {'item': annotate(store.card(updated or item, directory), *log_readers(), with_text=True), 'action': 'continue',
                 'committed': committed, 'dry_run': args.dry_run, 'session_linked': linked}
     payload = read_input(args.input_file, optional=command == 'discover')
     if command == 'discover':
@@ -215,6 +228,8 @@ def dispatch(args, directory):
     result = store.mutate(directory, op, payload, ident=getattr(args, 'id', None), rev=getattr(args, 'rev', None),
                           into=getattr(args, 'into', None), distinct=getattr(args, 'distinct', False),
                           verified=verification, dry_run=args.dry_run)
+    if isinstance(result.get('item'), dict) and 'card' not in result['item']:
+        result['item'] = store.card(result['item'], directory)
     if op == 'transfer':
         from pstate_sessions import link_transfer
         result['transfer_succeeded'] = not args.dry_run

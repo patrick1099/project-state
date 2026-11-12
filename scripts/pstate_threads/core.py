@@ -288,8 +288,24 @@ def validate_state(state):
         if any(not isinstance(pair, list) or len(pair) != 2 or any(not isinstance(v, str) for v in pair) for pair in identity['sources']):
             fail()
         optional = {key: val for key, val in item.items() if key in FIELDS and key not in ('title', 'confirmed', 'next_suggestion')}
-        if set(item) - (FIELDS | {'id', 'rev', 'state', 'sources', 'log', 'capture_identity', 'transferred_to'}):
+        if set(item) - (FIELDS | {'id', 'rev', 'state', 'sources', 'log', 'capture_identity', 'transferred_to', 'card_ref'}):
             fail()
+        if 'card_ref' in item:
+            reference = item['card_ref']
+            if (not isinstance(reference, dict) or set(reference) - {'version', 'path', 'sections', 'pending'}
+                    or reference.get('version') != 1 or not isinstance(reference.get('path'), str)
+                    or not reference['path'] or not isinstance(reference.get('sections'), dict)
+                    or any(key not in FIELDS or not isinstance(value, str) for key, value in reference['sections'].items())):
+                fail()
+            pending = reference.get('pending')
+            if pending is not None:
+                if (not isinstance(pending, dict) or set(pending) - {'operation', 'expected_sha256', 'text', 'edits', 'request'}
+                        or not {'operation', 'expected_sha256', 'text', 'edits'} <= set(pending)
+                        or not isinstance(pending['operation'], str) or not pending['operation']
+                        or (pending['expected_sha256'] is not None and not isinstance(pending['expected_sha256'], str))
+                        or not isinstance(pending['text'], str) or not isinstance(pending['edits'], list)
+                        or ('request' in pending and not isinstance(pending['request'], str))):
+                    fail()
         if (item['state'] == 'transferred') != ('transferred_to' in item):
             fail()
         if 'transferred_to' in item and (not isinstance(item['transferred_to'], str) or not item['transferred_to'].strip()):

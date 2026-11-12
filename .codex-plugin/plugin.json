@@ -1,6 +1,6 @@
 {
   "name": "project-state",
-  "version": "0.9.8",
+  "version": "0.10.0",
   "description": "全局待续回顾：当前会话收录、Claude/Codex 历史正文发现、来源追溯与用户选择；合并 session-sweep 后台判断、联合回顾页和显式迁移切换。事项只管立项之前，决定做并落进 Obsidian 任务后转交；会话互斥认领 Obsidian 任务目录、按仓库锁文件，旧待办看板停用。施工进度继续引用 HANDOFF；来源会话在卡片之后还有动静时提醒 AI 自己更新卡片，继续聊的会话自动登记为来源；Claude/Codex 共用任务认领与文件互斥；shell 采用可识别写路径和显式声明入口，收集判断可选 Codex 或 Claude。",
   "skills": "./skills/",
   "hooks": "./hooks/codex.json"

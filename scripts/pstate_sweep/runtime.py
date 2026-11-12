@@ -203,7 +203,7 @@ def reconcile_marks(cfg, state, out, now, snapshot=None):
     thread_closures = core.merge_closures(state.get("thread_closures"), core.parse_thread_marks(pending_text),
         core.parse_thread_marks(closed_text), set(), now,
         _combined_marks(archive_texts.values(), core.parse_thread_marks))
-    valid_thread_keys = {t["id"] + "@" + str(t["rev"]) for t in snapshot["items"].values()}
+    valid_thread_keys = {core.thread_closure_key(t) for t in snapshot["items"].values()}
     state.setdefault("thread_closure_history", {}).update(thread_closures)
     state["thread_closures"] = {key: value for key, value in thread_closures.items() if key in valid_thread_keys}
     return archive_texts
@@ -283,7 +283,7 @@ def run_sweep(cfg, judge, gate_loader, out_dir, state_dir, now=None, max_calls=N
         except Exception as exc:
             doc_error = type(exc).__name__ + ": " + str(exc)
         # The matter lock is short and is never held during any model call.
-        snapshot = thread_store.read(threads_dir) if threads_dir is not None else {"items": {}, "seen": {}}
+        snapshot = thread_store.snapshot(threads_dir) if threads_dir is not None else {"items": {}, "seen": {}}
         pages = write_pages(cfg, state, Path(out_dir), now, since_ts, doc_issues, doc_error, save,
                             snapshot=snapshot, dry_run=dry_run)
         report = {"at": now, "candidates": sum(not e.get("gone") and core.is_candidate(e["summary"], now,

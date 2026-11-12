@@ -11,6 +11,7 @@
 
 ## 约定
 
+- 事项正文权威在 `output_root/事项卡片/<可读标题>-<完整id>.md`；先读 show/continue 的 `card.body` 与 `card.sha256`，旧结构字段只是历史快照。正文自由手补，保留顶部受管元数据；修改用精确 edit-card 或可安全匹配的 set，冲突重读，不整卡覆盖。绑定卡缺失不能从 JSON 重建。
 - 唯一事项生命周期在 threads.json schema1；thread 只管立项之前，决定做后 transfer 给 Obsidian 任务目录。施工进度仍在 HANDOFF，全局事项只保留来源、决定和有时间的历史停点。只有 continue 自动把当前会话登记为卡片来源，set 不登记（scripts/pstate_threads/pickup.py；按会话号直接定位日志，不走 discover）。
 - 任务认领在 PSTATE_HOME/claims/task-claims.json（全局，认 Obsidian 任务目录）；文件锁在各仓 locks.json。两把短锁不嵌套持有，只读显示不加锁不写回，认领表坏了报错不覆盖。旧看板 new 一律拒绝，旧条目只读到 done 收尾。
 - 任务↔会话关联唯一存在任务目录 `会话.md` 受管区（scripts/pstate_sessions.py，`link` 命令在 pstate_sessions_cli.py）；claim/take/transfer/link 共用同一登记函数，短锁在 PSTATE_HOME/session-links，不与认领锁、事项锁嵌套；不依赖 hub、不做自动推断。
@@ -26,6 +27,8 @@
 ## 易错点
 
 - .py 受 Esafenet 保护，读搜改用 esafe-code；.pyw 保持明文。复杂输入用 UTF-8 --input-file 或 stdin，程序调用用参数数组。
+- `thread sync-cards --dry-run --json` 预演回填，`edit-card ID --rev N --input-file edits.json` 使用 `expected_sha256` 与 exact edits；set 可在 JSON 带同名 hash，无专用 CLI flag。未配置输出、卡片缺失或部分失败必须分别核对库与卡，不能报已完整记下。
+- 0.10.0 在 schema1 事项中增加 card_ref；0.9.8 严格校验会拒读新库。先更新全部宿主缓存、CLI 活源与后台入口，再回填；恢复旧库及卡片需明确处理，不混用版本或静默重建。
 - 不手改正式 threads/sources；损坏、未知 schema、备份恢复都需明确处理。rev 冲突先重读；replaced_unverified 先核落库，不能盲重试。
 - discover 的 limit/max_chars 只限制返回页，roots 每次读全部所选 JSONL；精确抽样用 files。旧时间戳勾选只映射首次来源版本，不能让同时间戳的新工具活动继承旧勾。
 - 个人仓先开 worktree 再改；不加 AI 署名。普通文档任务只改获派 MD，保留 HANDOFF 的已谈定和机器区。

@@ -26,6 +26,22 @@ for command in ([], ["thread"], ["sweep"]):
 
 通过宿主插件机制加载，完成必要的启用或信任；已有插件注册时不再重复添加全局 hooks。
 
+## 0.10.0 事项卡片升级
+
+先更新全部宿主插件缓存、CLI 稳定活源和后台入口到 0.10.0，再回填旧事项。事项库仍标 schema1，但新增 card_ref；旧 0.9.8 严格校验会拒读含此字段的库，不能混用。备份需保留事项库和当前卡片，恢复时明确核对两者对应关系，不用旧库覆盖用户手补。
+
+卡片使用已登记的 `PSTATE_HOME/sweep/paths.json.output_root`，放在其下 `事项卡片/<可读标题>-<完整id>.md`。先检查现有输出归属，不另建状态根、不为卡片启用后台或模型。无映射时 add 可保存事项，但回执 unconfigured 表示没有生成卡片；绑定卡缺失或元数据损坏须检查、恢复原文件，不能从 JSON 重建。
+
+```text
+pstate thread sync-cards --dry-run --json
+pstate thread sync-cards --json
+pstate thread show <事项ID> --json
+```
+
+核对预演后执行回填，逐项看 card_sync 和 show 的 card.body、sha256、sync_status。库已提交而卡片同步失败会报 E_PARTIAL_FAILURE；先核对回执和文件，再按恢复提示重放同一操作或 sync-cards，不能把部分成功报成全部成功。
+
+卡片顶部小段 pstate 身份、中文状态和任务链接保留，其后的正文可自由手补。show/continue 的 card.body 是当前内容，原结构字段只是历史快照；缺失卡会标 card.body_unavailable。局部改正文用 `thread edit-card ID --rev N --input-file edits.json`，JSON 提供 expected_sha256 和精确 edits；set 兼容结构字段并可在 JSON 带 expected_sha256，没有同名 CLI flag。详见 [卡片使用规则](skills/pstate/SKILL.md)。
+
 ## hooks 的行为契约
 
 | 时机 | 所需信息 | 必须保持的结果 |

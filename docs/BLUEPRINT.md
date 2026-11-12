@@ -52,13 +52,17 @@
 - 注入输出：`{"hookSpecificOutput": {"hookEventName": <事件名>, "additionalContext": <文本>}}`；拦截输出：`{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": <文本>}}`；放行时不输出。均为 UTF-8。`run --json` 与 `run --format json` 返回 ok/data/error/meta 信封，失败只写 stderr，退出码 0/1/2 分别为成功/运行失败/参数错误。
 
 ### 2.6 全局待续事项与历史回顾
+- 记住即落卡：输出映射与归属有效时，add 在既有 `output_root/事项卡片/` 创建独立 UTF-8 Markdown，文件名为可读标题加完整事项 id；首次文件名确定后，改标题不自动改名。已有事项用 `thread sync-cards` 显式回填，重复执行不另建卡；未配置输出时事项仍可保存，回执 `card_sync.status=unconfigured`，不能据此声称卡片已生成。记录卡片不启用后台或模型。
+- 正文权威：卡片顶部小段身份、版本、中文状态和转交任务链接由 pstate 维护，用户保留该段，在其后的整个正文自由编辑，不要求分 AI 区或用户区。show/list/continue 返回当前完整 `card.body`、UTF-8 正文 `card.sha256`、路径和同步状态，并以 `content_authority=card.body` 标识；原 title/motivation/questions 等结构字段保留为历史快照，confirmed/source 仍是原话核验元数据；卡片逐条显示已核验或未核验，并注明核验只证明出处。绑定卡失踪或元数据损坏时正文不可用，标 `card.body_unavailable`，不得退回旧摘要冒充现状。
+- 局部更新：`edit-card ID --rev N` 输入 `expected_sha256` 与精确 old/new/count edits，仅改命中正文；旧 hash、rev 或命中次数不符即冲突，保留当前内容。set 兼容结构字段更新，只替换对应的原生成片段，用户改过该片段则拒绝；无关手补保留，可在 JSON 另带 `expected_sha256` 检查整正文并发。状态、来源和转交同步保留正文。卡片手补和回顾页勾选均不产生用户决定或授权。
 - 当前会话主动收录：个人想法已有实质内容且值得跨会话继续 → 当前 AI 形成 open 卡片，记录动机、有效结论、未定问题、带时间的历史停点和来源。收录不等于承诺；公司事项不自动收录。事项关联 0..N 个工程路径，可无 Git；会话、仓库、worktree 都不是事项身份。
 - 历史发现：给 Claude/Codex 本地历史范围 → 返回有界纯正文、原生消息来源、内容版本、覆盖统计和续页游标。当前 AI 阅读、筛选、拆分与归并后 add；用户看可继续的卡片，不逐页筛原文。交互 discover 不做语义判断、不另调模型；后台判断单独显式启用，不自动全量导入事项。
 - 来源与时效：保留原话的来源平台、会话、锚点、时间、角色、摘录及哈希；来源核验失败明确标未核验。核验只证明原话出处，不证明其授权含义。AI 建议单独标识；历史卡可保留带时间和来源的当时停点，声称当前现状或真正恢复执行前才由当前 AI 查 Git、成果和 HANDOFF。历史 stopped_at 必须带截至时间，不能冒充当前进度。
 - 卡片跟着现状走：卡片常在会话中途记下，同一会话随后把事做完或推进。当前会话是 open/decided 卡的来源时，每轮开头提醒 AI：做完就自己 done（带证据）、有进展就 set，改了告诉用户；回顾时 list/show 对来源会话在卡片最后更新后又有用户消息的卡标 possibly_stale。AI 判断完成不需用户先开口；do/later/drop/reopen 仍要用户原话。没经过 continue 接手、在别的会话里直接做掉的事两者都抓不到，声称现状前照旧核 Git、成果和 HANDOFF。
 - 接手登记：只有 continue 把当前会话（CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID 恰有一个时取）最近一条用户消息追加为来源；set 不登记（回顾时顺手改卡的会话不该变成来源，否则它之后聊别的事会让卡片反复标过期、每轮收到无关提醒）。用户消息含 Codex 旧格式日志里的那种：登记的来源只说明“谁在干这件事”，不当用户确认用，核验原话仍只认原生。“最近一条”按时间解析后取最晚。条件：卡为 open/decided、本会话尚非来源；成功则 rev+1，log 记 append_sources（via=pickup）。在同一把事项锁内重读状态再写，不需外部 rev。日志按会话号直接定位，同会话的全部日志一起读（Claude `projects/*/<sid>.jsonl`；Codex `sessions`、`archived_sessions` 下 `rollout-*-<sid>.jsonl[.zst]`），不走 discover（它排除当前会话）。认不出会话、找不到日志、没有用户消息或写入失败时不登记、不让命令失败，回执 session_linked {linked, reason} 说明；替换后读回失败（commit_status=replaced_unverified）时 linked 与 committed 都报 null，不冒充未写，先 show 核对。登记后该会话与原来源同等：每轮提醒、回顾时查其日志。登记那条消息若同时提了另一件事，另记时 add 要加 --distinct（同锚点）。不改 schema。
-- 归并与幂等：重复收录相同标题及来源可返回已有 ID；同锚点拆成不同事项须明确 --distinct，追加到已有事项用 --into ID --rev N，且仅追加来源。改摘要走 set。新来源不能重开 parked/dropped/done/transferred；同名仅提供相似提示，不自动合并。
+- 归并与幂等：重复收录相同标题及来源可返回已有 ID；同锚点拆成不同事项须明确 --distinct，追加到已有事项用 --into ID --rev N，且仅追加来源。改当前正文走 edit-card；set 兼容仍可精确匹配的结构字段。新来源不能重开 parked/dropped/done/transferred；同名仅提供相似提示，不自动合并。
 - 四个选择：continue 返回卡片、状态不变，并做接手登记（登记成功时版本+1，可 --dry-run，不接 --rev/--input-file）；do → decided，仅记录决定，不创建任务或执行工作；later → parked，默认隐藏但 list --all/--state parked 可找回；drop → dropped，保留决定记录。do/later/drop 需要用户原话及来源。
+- 转交前由当前 AI 读取 card.body，将当前目标、结论、未定问题与人工补充承接进目标任务文档并回读；不能仅复制旧 JSON 快照。转交后原卡保留正文，顶部显示已转交和任务链接，施工进度归任务 HANDOFF。
 - 转交（transfer ID --rev N，输入 {to, evidence}）：只允许 decided → transferred，且让它进入 decided 的那次 do 原话已核验（confirmed=true），否则退出 1；to 必须是已存在的绝对路径任务目录 `…/task/Tnn-名称`（不符退出 2，CLI 只核这一点，内容是否交接由 evidence 如实写），保存为规范化真实路径；evidence 为非空字符串数组。记录 transferred_to 字段，log 留 to、evidence、时间、actor=assistant。transferred_to 只能由 transfer 写，add/set 不能改。transferred 视为关闭：do/later/drop/done 前须 reopen。目录以后搬走不影响读库，show 的 transferred_facts 标出是否还在。transfer 不写 seen。
 - 转交登记会话：转交提交后，把该事项全部 sources 按会话身份去重登记进目标任务的 `会话.md`（标签：立项前来源、`事项:<id>`、`锚点:<anchor>`），执行转交的当前会话也登记（标签：转交执行、`事项:<id>`）。逐会话写入，一个失败不影响其余；转交成功但登记部分失败 → 错误码 E_PARTIAL_FAILURE、退出 1，回执分开列转交结果与每条失败及补记命令。对已转交到**同一**任务的事项用当前 rev 重跑 transfer 只做登记补记，不改事项、不加 log、不需 reopen；目标不同仍退出 1。dry-run 走同一登记路径但不写文件。
 - 完成与重开：done 必须带非空 evidence，可由 assistant 基于实际证据记完成，不捏造用户确认；若附用户原话，照样核验。reopen 将 parked/dropped/done/transferred 设为 open（清掉 transferred_to，历史留在 log），需要明确用户原话。dropped/done/transferred 要再选 do/later/drop，先显式 reopen。
@@ -67,18 +71,19 @@
 - 历史边界：普通 discover 每次读取所选 roots 内全部 `.jsonl` 与 Codex 压缩的 `.jsonl.zst`（默认 roots 含 Codex 的 sessions 与 archived_sessions），没有扫描缓存；zst 整帧解压校验通过才读，截断或损坏整份记为不可读、不吐出部分消息、来源核验不通过；同一会话号的多个文件互不为前缀时各自的消息都保留，不按行数取舍；limit/max_chars 仅限制返回页，files 可精确抽样。过滤可识别的 agent/headless、工具、系统、推理及压缩副本；旧格式人类身份不确定保留 legacy/unknown，不声称完整覆盖；Claude 只把 origin.kind=human 且入口为 cli / claude-vscode / claude-desktop 的消息算原生人类消息；本地缺失或删除不可恢复。导入的旧摘要与 checked/closed 仍只作来源资料及提醒关闭，不代表事项 done 或会话 seen。
 
 新增 I/O 契约：
-- 命令入口为 `thread add/list/show/set/choose/done/transfer/reopen/discover/seen`；后台及冻结录入为 `sweep` 子命令；复杂输入为 UTF-8 JSON 的 --input-file 或 stdin。JSON 输出信封为 ok/data/error/meta；成功 stdout，失败 stderr；退出码 0/1/2 = 成功/运行失败或冲突/输入错误。--ai-help/--help 始终输出帮助文档。
+- 命令入口为 `thread add/list/show/set/choose/done/transfer/reopen/discover/seen/sync-cards/edit-card`；后台及冻结录入为 `sweep` 子命令；复杂输入为 UTF-8 JSON 的 --input-file 或 stdin。JSON 输出信封为 ok/data/error/meta；成功 stdout，失败 stderr；退出码 0/1/2 = 成功/运行失败或冲突/输入错误。--ai-help/--help 始终输出帮助文档。
 - add 必需 title/sources；可编辑字段为 title/motivation/confirmed/questions/stopped_at/next_suggestion/paths/handoff。confirmed 是 {said, source} 数组，回读含 verified/verification_note；questions/paths/handoff 为字符串数组，next_suggestion 输入为文本、保存带 AI 标记。
 - source 必需 platform/session/anchor/time/role/excerpt/excerpt_hash，path 可选但原话核验需要它；另可选 host/agentId/start_dir（agentId、start_dir 可为空串），转交登记会话时用作身份与起始目录；excerpt_hash = UTF-8 摘录 SHA-256。选择输入为 said/source，said 须逐字包含于用户摘录；done 为 evidence 字符串数组并可附 said/source。
 - discover 可用 roots/files/since/limit/max_chars/cursor/exclude_sessions/sweep_state；返回 sessions/next_cursor/coverage/warnings，消息含 source 与分片范围。seen 必需 platform/session/version。详细调用示例见 skill。
-- 全局库为 `PSTATE_HOME/threads/threads.json`（默认根同旧任务目录），备份为 bak.json，schema=1；事项有稳定 id、rev、state、sources 与 log。旧 tasks/locks 数据与入口继续兼容，无自动迁移。
+- 全局库为 `PSTATE_HOME/threads/threads.json`（默认根同旧任务目录），备份为 bak.json，schema=1；事项有稳定 id、rev、state、sources 与 log，绑定卡片另存相对输出根的 card_ref。生命周期与来源仍以库为准，卡片正文以 Markdown 为准。旧 tasks/locks 数据与入口继续兼容，无自动迁移。
+- 卡片与库同步分开核验：库已提交而卡片未同步返回 E_PARTIAL_FAILURE、同步状态及恢复信息，不能说两边都成功；先 show 核对，再按回执重放同一操作或 sync-cards。已绑定卡失踪不自动重建，先恢复或检查文件；缺映射、未知归属及损坏元数据拒绝相关卡片写入。sync-cards 与 edit-card 均支持共用写路径的 --dry-run；预演返回拟正文但不写业务文件。
 - 修改使用版本检查，失败不覆盖损坏或未知结构；主库缺失而备份存在时要求显式恢复。变更命令的 dry-run 与实际执行共用校验及事务路径，不写业务状态，仅可能创建协调锁。替换后读回核验；replaced_unverified 必须先核实际落库，不盲重试。
 
 ### 2.7 后台发现与联合回顾页
 
-- 给出已启用的状态根与输出目录 → 联合页面显示完整事项卡片和待审来源摘要。事项关联 0..N 工程，一会话可有多事项；部分关联显示“已关联N项，余部未审”。只有完整审过相同正文版本，才因关联自动收起已经展示的来源。
+- 给出已启用的状态根与输出目录 → 联合页面显示当前完整卡片正文、当前正文标题、独立卡片链接和待审来源摘要；绑定卡正文不可读时明确提示，不拿旧摘要替代。事项关联 0..N 工程，一会话可有多事项；部分关联显示“已关联N项，余部未审”。只有完整审过相同正文版本，才因关联自动收起已经展示的来源。
 - 旧后台 AI 判完成/放弃的来源沿用默认隐藏，公司来源也不列页；完整摘要、错误、关闭和原页资料始终可从 sources 查询，原文仍在时可 discover。筛选不写事项状态或 seen；新来源不复活 parked/dropped/done。
-- 勾选关闭该活动版本整条提醒（含未识别余部），取消恢复；不改变事项、不代表已审。写页前最后读主清单、已处理页及全部周档勾选；同条冲突以恢复为准。最近窗口按天显示，更早按来源原时间周归档；只删除带工具标记的空归档。
+- 事项提醒版本同时包含 rev 与当前正文 hash，用户手补后旧勾不再隐藏新内容；旧无卡片事项保留 id@rev 兼容。勾选关闭该活动版本整条提醒（含未识别余部），取消恢复；不改变事项、不代表已审。写页前最后读主清单、已处理页及全部周档勾选；同条冲突以恢复为准。最近窗口按天显示，更早按来源原时间周归档；只删除带工具标记的空归档。
 - 来源身份为平台+原生会话ID。review_version 是正文内容版本（兼容原 version hash），activity_version 包括工具活动；后台按后者判断新活动，seen 只认前者。旧 summary.version 时间戳与 sid@timestamp 勾选保留，首次映射固定，不能因同时间戳新活动继承旧关闭。
 - 来源摘要永久保留，原文消失标不可用而不删摘要，原文恢复可撤标。迁移使用来源原时间；未变来源沿用判断，不重复调用模型。
 - 后台保留配置中的 recap/自答策略、owner 线索、成功写路径、入口信息、预算、超时、失败上限及文档疑似未同步提示。新鲜 recap 必须晚于最后有效活动；无新鲜 recap 才在支持的平台分叉自答。判断平台由 `judge.backend` 选择 Codex 或 Claude，不自动换平台。Claude 保留分叉自答；Codex 将可识别的原生对话正文交给临时、只读、无工具的进程，按 JSON schema 返回判断，不恢复原会话，也不要求原工作目录仍存在。材料超过配置长度时明确失败，不静默截断。Codex 历史来源仍只提供交互发现，本次未扩大后台历史扫描范围。
@@ -117,6 +122,7 @@
 - 不进 git、不进 hub 长期记忆；不做跨机器同步。
 - 文件锁与任务认领按已接入宿主提供；具体能力及已验证范围见第 6 节，未接入的宿主不据此获得支持声明。
 - 会话登记只记经过 claim / take / transfer / link 的会话；漏登记的工作不会被自动补上，登记也只证明“关联过”，不证明实际完成了工作。
+- 0.10.0 卡片升级：schema1 增加受控 card_ref，旧 0.9.8 严格 schema 校验会拒读含此字段的库。先更新全部宿主缓存、CLI 活源及后台入口，再 sync-cards 回填；不能让旧版继续读写新库。回退或恢复备份须明确处理库与卡片的对应关系，不能只换回旧程序或悄悄恢复旧快照。
 - 版本切换：新状态 transferred 与认领表只有 0.5.0 起认得。两平台 manifest、插件缓存、稳定活源与后台一起发布；旧版读到含 transferred 的事项库会拒绝读（不会改坏）。旧版写在 locks.json 的看板认领在 0.5.0 里被忽略。`会话.md` 登记、`link` 命令与 Codex `.jsonl.zst` 历史读取从 0.6.0 起才有。
 
 ## 4. 硬约束 + 重构自由声明
@@ -127,6 +133,7 @@
 - 撞上占用必须拦下（不是只提醒），并给出能让用户做决定的信息。
 - 非写前钩子出错返回非阻断错误并留下诊断，不拦工具；写前检查出错一律闭锁拒绝并留 hook-diagnostics。
 - 判断平台以一份注册表选择、每平台独立适配；增删平台不改扫描、去重和页面规则，一个平台的调用失败不触发另一个平台。
+- 卡片读写沿用输出映射、归属与物理路径互斥；同时需要输出锁和事项锁时先输出锁后事项锁。正文未命中精确编辑条件不得覆盖，用户自由手补不改变来源核验结果。
 - 只用 Python 标准库。
 - 以上未列出的一切均为实现细节，重构可随意更改。
 

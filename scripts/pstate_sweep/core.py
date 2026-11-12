@@ -478,7 +478,7 @@ def render_archive_page(monday, items, page_name):
 def is_generated_archive(text):
     return ARCHIVE_MARK in (text or "")
 
-THREAD_MARK = re.compile(r"^[ \t]*[-*+][ \t]+\[([^\]])\].*?%%pt:([A-Za-z0-9_.:-]+)@([0-9]+)%%", re.M)
+THREAD_MARK = re.compile(r"^[ \t]*[-*+][ \t]+\[([^\]])\].*?%%pt:([A-Za-z0-9_.:-]+)@([0-9]+(?::[0-9a-f]{64})?)%%", re.M)
 
 
 def parse_thread_marks(text):
@@ -496,12 +496,20 @@ def annotate_sources(items, snapshot):
     return items
 
 
+def thread_closure_key(thread):
+    version = str(thread["rev"])
+    card = thread.get("card") or {}
+    if card.get("sha256"):
+        version += ":" + card["sha256"]
+    return thread["id"] + "@" + version
+
+
 def thread_items(snapshot, closures, now):
     out = []
     for thread in snapshot["items"].values():
         if thread["state"] not in ("open", "decided"):
             continue
-        key = thread["id"] + "@" + str(thread["rev"])
+        key = thread_closure_key(thread)
         closure = closures.get(key)
         # Keep active matter cards on the current page; source times remain in the full card.
         out.append({"thread": thread, "sid": thread["id"], "last_ts": now,
@@ -512,26 +520,40 @@ def thread_items(snapshot, closures, now):
 def thread_lines(it, with_closed_at=False):
     t = it["thread"]
     box = "x" if it["closed"] else " "
-    lines = [f"- [{box}] **{_one_line(t['title'])}** %%pt:{t['id']}@{t['rev']}%%",
+    card = t.get("card") or {}
+    heading = re.search(r"^# +([^\r\n]+)", card.get("body") or "", re.M)
+    title = heading.group(1) if heading else t["title"]
+    lines = [f"- [{box}] **{_one_line(title)}** %%pt:{thread_closure_key(t)}%%",
              f"    - 事项：{t['id']} · {t['state']} · rev {t['rev']}",
              "    - 勾选只关闭此版本提醒，不改变事项决定。"]
-    labels = {"motivation": "动机", "stopped_at": "历史停点", "next_suggestion": "AI建议"}
-    for field, label in labels.items():
-        value = t.get(field)
-        if isinstance(value, dict):
-            value = value.get("text")
-        if value:
-            lines.append(f"    - {label}：")
-            lines.extend("        " + line for line in str(value).splitlines())
-    for fact in t.get("confirmed", []):
-        lines.append(f"    - 已有结论（原话核验{fact['verified']}）：")
-        lines.extend("        " + line for line in fact["said"].splitlines())
-        lines.append("        来源：" + _source_line(fact["source"]))
-        lines.extend("        " + line for line in fact["source"]["excerpt"].splitlines())
-        lines.append("        核验说明：" + fact["verification_note"])
-    for field, label in (("questions", "未定问题"), ("paths", "关联工程"), ("handoff", "进度现场")):
-        for value in t.get(field, []):
-            lines.append(f"    - {label}：{value}")
+    card = t.get("card") or {}
+    if isinstance(card.get("body"), str):
+        target = str(card.get("link") or card.get("path") or "").replace("\\", "/")
+        if target:
+            lines.append(f"    - [[{_link(target)}|事项卡片]]")
+        lines.append("    - 当前正文：")
+        lines.extend("        " + line for line in card["body"].splitlines())
+    elif "card" in t:
+        lines.append("    - 卡片正文不可读；请检查事项卡片，不以旧摘要代替当前内容。")
+        lines.append("    - 卡片状态：" + str(card.get("sync_status") or "unavailable"))
+    else:
+        labels = {"motivation": "动机", "stopped_at": "历史停点", "next_suggestion": "AI建议"}
+        for field, label in labels.items():
+            value = t.get(field)
+            if isinstance(value, dict):
+                value = value.get("text")
+            if value:
+                lines.append(f"    - {label}：")
+                lines.extend("        " + line for line in str(value).splitlines())
+        for fact in t.get("confirmed", []):
+            lines.append(f"    - 已有结论（原话核验{fact['verified']}）：")
+            lines.extend("        " + line for line in fact["said"].splitlines())
+            lines.append("        来源：" + _source_line(fact["source"]))
+            lines.extend("        " + line for line in fact["source"]["excerpt"].splitlines())
+            lines.append("        核验说明：" + fact["verification_note"])
+        for field, label in (("questions", "未定问题"), ("paths", "关联工程"), ("handoff", "进度现场")):
+            for value in t.get(field, []):
+                lines.append(f"    - {label}：{value}")
     for source in t["sources"]:
         lines.append("    - 原话来源：" + _source_line(source))
         lines.extend("        " + line for line in source["excerpt"].splitlines())

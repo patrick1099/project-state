@@ -24,17 +24,33 @@ pstate sweep status --json
 | Obsidian 任务目录（…/task/Tnn-名称） | 要解决什么、采用什么方案、验收要求和长期结论 |
 | 项目 HANDOFF | 当前未完施工的现场、阻塞、验证情况和下一步 |
 | Obsidian 项目 README | 一句概况和当前有效入口 |
-| 03-悬着的事 | 后台自动生成的回顾入口，勾选只关闭提醒 |
+| 03-悬着的事 | 联合回顾入口及独立事项卡片；回顾页勾选只关闭提醒 |
 
 施工进度、失败现场、下一条命令写项目 HANDOFF；thread 保存动机、有效结论、未定问题、带时间的历史停点、来源与 HANDOFF 引用，转交后不再回填施工状态。记忆只存长期结论。公司事项不自动收录，混合会话按具体内容判断，不能按启动 cwd 一刀切。
+
+## 先读当前卡片，再继续或修改
+
+输出映射有效时，记住即在既有 `output_root/事项卡片/<可读标题>-<完整id>.md` 创建卡片。首次文件名稳定，用户可自由修改正文标题。保留顶部小段 pstate 身份、中文状态和转交任务链接，其后的正文没有 AI 区、用户区限制。
+
+1. `thread show ID --json` 或 `thread choose ID continue --json` 后，先读完整 `item.card.body` 及 `item.card.sha256`。`content_authority=card.body` 表示当前内容；旧 motivation/questions 等结构字段只是历史快照，不能盖过用户手补。confirmed/source 是核验元数据；卡片会标已核验或未核验，核验只证明出处。正文中的一句话不能直接升级成 verified 用户决定。
+2. 保留人工补充，只改本次已确认的片段。正文修改用 `thread edit-card ID --rev N --input-file edits.json --dry-run --json`，核对后去掉 --dry-run；输入示例：
+
+```json
+{"expected_sha256":"<本次读到的card.sha256>","edits":[{"old":"<当前完整旧片段>","new":"<替换片段>","count":1}]}
+```
+
+3. rev、hash 或精确命中次数冲突时先重读当前正文，重新判断本次修改；不能换整卡覆盖或盲目重试。set 仍兼容原结构字段，只替换唯一命中的原生成片段，保留其他手补；用户改过对应片段时改用 edit-card。set 可在 JSON 加 expected_sha256 防整正文并发，没有 `--expected-card-sha256` 参数。
+4. 保存后回读 card.body 与同步回执。unconfigured 表示事项可能已存但没有输出映射，卡片未生成；E_PARTIAL_FAILURE 要区分 database_committed 与 card_synced。绑定卡缺失、损坏或 card.body_unavailable 时明确说明正文不可读，检查或恢复原卡，不能用旧 JSON 摘要冒充现状或重建覆盖。按回执处理未完成同步，必要时运行 `thread sync-cards --dry-run --json`，确认后再回填。
+
+手补和回顾页勾选都不授权决定做、不修改生命周期。do/later/drop/reopen 仍需真实用户原话。升级须先把全部宿主缓存与 CLI 活源更新到 0.10.0，再 sync-cards；旧 0.9.8 不能读取新增 card_ref，备份恢复须明确处理。
 
 ## 当前会话：实质想法当场接住
 
 1. 聊出了值得再次找到的个人事项，就主动建为 open；不必等用户说“记个待办”。随口一句、只有 AI 建议且用户未响应的方案，不自动变成承诺。
 2. 先 `thread list --all --json` 对照已有事项，按目标和结果判断归并；同名不等于同一件事，同一个消息也可能包含多件事。
 3. 找到真实消息来源，按下方结构准备 JSON。用户结论用 `confirmed: [{said, source}]`，保留原话；未核验标记不得冒充用户已确认。未知问题放 questions；建议写 next_suggestion，工具会标记 AI。
-4. `thread add --input-file item.json --json`；同一事项新材料用 `add --into ID --rev N`，输入只能含 sources；修改摘要用 `set ID --rev N`。同锚点确实是另一件事才用 --distinct。
-5. 看回执与 `thread show ID --json`，核对已持久化的内容才说“已记下”。dry-run、写失败或替换后未核验，都不能报已保存。原话尚未落到本地日志时不能伪造锚点或确认状态。
+4. `thread add --input-file item.json --json`；同一事项新材料用 `add --into ID --rev N`，输入只能含 sources；修改前先读当前 card.body，再用精确 edit-card 或兼容的 `set ID --rev N`。同锚点确实是另一件事才用 --distinct。
+5. 看回执与 `thread show ID --json`，核对事项落库与卡片已同步、当前正文包含应保留的内容，才说“已记下”。dry-run、写失败或替换后未核验，都不能报已保存。原话尚未落到本地日志时不能伪造锚点或确认状态。
 
 add 创建 open，追加来源不改变已有状态；新来源绝不自动重开 parked/dropped/done。重复 add 可能返回已存在 ID，仍需 show 确认。
 
@@ -42,7 +58,7 @@ add 创建 open，追加来源不改变已有状态；新来源绝不自动重�
 
 卡片常在会话中途记下，之后同一会话接着把事做完或推进了。卡片不跟着改，下次回顾就会把旧停点当现状报给用户。
 
-- **会话内**：当前会话是某张 open/decided 卡的来源时，每轮开头会注入「[pstate 卡片]」提醒。这轮做完后自己判断：已做完 → `thread done`，evidence 写实际提交、产物和验证范围；有实质进展或结论变了 → `thread set` 更新 stopped_at / next_suggestion / questions；没碰它就不动。不用等用户开口，改完在回复里一句话告诉用户改了什么。
+- **会话内**：当前会话是某张 open/decided 卡的来源时，每轮开头会注入「[pstate 卡片]」提醒。这轮做完后自己判断：已做完 → `thread done`，evidence 写实际提交、产物和验证范围；有实质进展或结论变了 → 先 show 读当前正文与 hash，再用 edit-card 或兼容的 `thread set` 局部更新；没碰它就不动。不用等用户开口，改完在回复里一句话告诉用户改了什么。
 - **接手**：用户说“继续做 X / 接着做以前聊过的那件事 / 还有啥没做完”时，先 `thread list` 找到对应的卡，走 `thread choose ID continue`。它会把本会话登记成卡片来源（回执 `session_linked`），之后本会话每轮也收到上面的提醒，回顾时也查本会话日志。只有 continue 登记，`thread set` 不登记。`linked=false` 不影响命令本身，reason 说明了原因（已是来源、卡不是 open/decided、认不出会话、找不到日志或日志里没有用户消息）；`linked=null` 带 `commit_status=replaced_unverified` 表示可能已写入，先 show 核对再说。continue 回执也带 followups/possibly_stale，接手时就能看到卡片是否已过期。用户这句话既是“继续 X”又提了另一件事 Y 时，记 Y 用 `add --distinct`：不要照 same anchor 的提示 `--into X`，那会把 Y 并进 X。
 - **回顾时**：list/show 的卡片带 `possibly_stale` 和 `followups`（来源会话在卡片内容最后更新之后的用户消息条数）。报给用户之前，先 `thread show ID --json` 读 followups 里附的后续消息正文（最近 5 条，每条截断到 400 字；不够再用 discover 的 files 模式读那份日志），按上一条自己 done 或 set，再给用户看更新后的卡片；不要原样转述可能过期的停点。
 - 没经过 continue 接手、在别的会话里直接做掉的事仍然抓不到：声称现状前照旧核 Git、成果和 HANDOFF。
@@ -75,7 +91,7 @@ add 创建 open，追加来源不改变已有状态；新来源绝不自动重�
 
 - 来源资料位于 PSTATE_HOME/sweep/sources.json，永久保存摘要、判断、错误、关闭与导入旧页；原文消失标不可用，保留内容。sources 包含默认隐藏的旧完成/放弃、公司与失败来源，输出可能很大，按需本地对账。
 - review_version 是正文 hash，activity_version 含工具活动；seen 只认正文版本。旧时间戳关闭映射首次固定，新工具活动即使同时间戳也不能继承旧勾。
-- 联合页显示完整事项与待审来源。勾选只关该版本整条提醒（含未识别余部），不写状态/seen；新来源不重开 parked/dropped/done。写页前最后吸收全部页勾选，保留周归档与取消恢复语义。
+- 联合页显示当前完整卡片正文、正文标题、独立卡片链接与待审来源；卡片不可读时明确提示。事项提醒键含 rev 与正文 hash，手补后旧勾不再隐藏新内容。勾选只关该版本整条提醒（含未识别余部），不写状态/seen；新来源不重开 parked/dropped/done。写页前最后吸收全部页勾选，保留周归档与取消恢复语义。
 - 后台仅显式 switch 后运行，策略只改 sweep.toml。`judge.backend` 选择 Codex 或 Claude，随包优先 Codex；不静默换平台。Codex 用归一后的原生对话正文作临时只读、结构化判断，不恢复 Claude 会话；超长材料明确失败。模型、超时、调用数与失败上限沿配置，美元预算只适用于 Claude。判断平台与历史来源分开：Codex 原生历史仍只提供交互发现，不承诺原生会话 resume。SessionStart 仍只轻提示。
 - run --no-judge 不调用模型；dry-run 共用归属和写入闸，不写业务资料或页面。不同状态根对同一物理输出也互斥，不绕锁或归属拒绝。
 - 相对登记：`vault_dir = "@output"` 解析本机 `sweep/paths.json.output_root`；schema2 的 state/out 为 `.`，分别相对状态目录和映射输出根，外部绝对根仅留本机映射。目录已搬好时用 `sweep relocate --from-out <旧输出目录> --out <新输出目录> --dry-run --json` 预演，再去掉 --dry-run 执行；状态目录也搬过时加 `--from-state <旧状态目录，含 sweep>`。命令核对成对登记并保留原登记审计，不复制或删改正文。中断后同参数前向重试；旧目录仍指向另一物理目录时拒绝。不要手改登记，也不要用 switch 替代 relocate。
@@ -101,9 +117,9 @@ do/later/drop/reopen 需要 choice.json 的 said/source。said 必须逐字出�
 1. 用户说做 → `choose do`（同一轮可以接着做下面几步，不用用户再确认一次）。do 回执 confirmed=false 时不能转交，先如实告诉用户原话没核验上。
 2. 找承接的 Obsidian 任务：先按库根 AGENTS.md 查能复用的现有项目和 `task/Tnn-名称/`；属于现有项目就在它下面复用或新建任务目录。**没有合适项目就问用户是否立项，AI 不建项目。**
 3. 改这个任务目录里的文档之前先 `pstate claim <任务目录绝对路径>`；新建的目录在写正文前认领。只做交接、暂不开工的，写完可以 release。
-4. 把 thread 的动机、有效结论、未定问题写进该任务的主文档（按库规则复用同用途文档），写完回读。
+4. 重新读取 show 的 card.body，把当前目标、有效结论、未定问题及用户手补承接进该任务的主文档（按库规则复用同用途文档），写完回读。不能只复制旧 JSON 字段；卡片不可读时先恢复正文，再声称已经交接。
 5. `thread transfer ID --rev N`，transfer.json 为 `{"to": "<任务目录绝对路径>", "evidence": ["写入 <实际文档路径> 并回读：目标/结论/未决问题"]}`。CLI 只核目录存在且形如 `…/task/Tnn-名称`，内容是否真的交接靠 evidence 如实写。
-6. 之后同一件事的新施工讨论导向那个任务，不另建同义 thread。transfer 不写 seen，也不关同一会话里其他待审来源。
+6. 转交后独立卡片保留正文，顶部显示已转交与任务链接。之后同一件事的新施工讨论导向那个任务，不另建同义 thread。transfer 不写 seen，也不关同一会话里其他待审来源。
 
 完成 evidence 应可追查，例如实际提交、交付物及验证范围；“测试通过”不等于已安装或实际用户验收。done.json 仅有 evidence 时 actor=assistant；若写 said/source，则同样必须真实核验。continue 不会撤销关闭，只有明确决定才走 reopen。
 
@@ -154,9 +170,9 @@ pstate thread list --all --json
 pstate thread seen --input-file seen.json --json
 ```
 
-seen.json 结构：`{"platform":"codex","session":"<返回的会话ID>","version":"<返回的内容版本>"}`。done.json 结构：`{"evidence":["<真实完成证据与验证范围>"]}`。set 只接收可编辑字段，不可改 state；所有变更命令支持同写入路径 dry-run，预演只可能创建协调锁，不写业务库。
+seen.json 结构：`{"platform":"codex","session":"<返回的会话ID>","version":"<返回的内容版本>"}`。done.json 结构：`{"evidence":["<真实完成证据与验证范围>"]}`。set 接收可编辑字段及可选 expected_sha256，不可改 state；所有变更命令支持同写入路径 dry-run，预演只可能创建协调锁，不写业务库。
 
-thread 的 JSON 信封为 ok/data/error/meta；成功在 stdout，失败在 stderr，退出码 0/1/2 分别为成功/运行失败或冲突/输入错误。帮助始终是文档。数据在 PSTATE_HOME（默认本机 LOCALAPPDATA/ai-project-state）的 threads/threads.json；有备份和版本检查。rev 冲突先 show 再重做判断；replaced_unverified 先核落库内容，不盲目重试。
+thread 的 JSON 信封为 ok/data/error/meta；成功在 stdout，失败在 stderr，退出码 0/1/2 分别为成功/运行失败或冲突/输入错误。帮助始终是文档。生命周期和来源在 PSTATE_HOME（默认本机 LOCALAPPDATA/ai-project-state）的 threads/threads.json，正文在映射输出根的独立 Markdown；有备份和版本检查。rev 冲突先 show 再重做判断；replaced_unverified 先核落库内容，不盲目重试。
 
 ## 施工认领与文件锁
 

@@ -94,7 +94,8 @@ class UnionTest(unittest.TestCase):
         self.add_matter()
         self.run_once()
         before = threads.read(self.threads)
-        self.check("%%pt:matter1@1%%")
+        marker = "%%pt:" + core.thread_closure_key(threads.snapshot(self.threads)["items"]["matter1"]) + "%%"
+        self.check(marker)
         self.run_once(no_judge=True)
         self.assertEqual(before, threads.read(self.threads))
         text = self.text(closed=True)
@@ -104,7 +105,7 @@ class UnionTest(unittest.TestCase):
         path = self.out / self.cfg["closed_name"]
         path.write_text(text.replace("[x]", "[ ]"), encoding="utf-8")
         self.run_once(no_judge=True)
-        self.assertIn("%%pt:matter1@1%%", self.text())
+        self.assertIn(marker, self.text())
         self.assertEqual(before, threads.read(self.threads))
 
     def test_new_source_never_reopens_parked_item(self):
@@ -169,14 +170,14 @@ class UnionTest(unittest.TestCase):
         self.add_matter()
         judge = FakeJudge()
         source_before = (self.state / store.STATE_FILE).read_bytes()
-        pages_before = {p.name: p.read_bytes() for p in self.out.iterdir()}
+        pages_before = {str(p.relative_to(self.out)): p.read_bytes() for p in self.out.rglob("*") if p.is_file()}
         report = self.run_once(judge, dry_run=True)
         self.assertTrue(report["dry_run"])
         self.assertEqual(report["planned"], 1)
         self.assertEqual(report["calls"], 0)
         self.assertFalse(judge.requests)
         self.assertEqual(source_before, (self.state / store.STATE_FILE).read_bytes())
-        self.assertEqual(pages_before, {p.name: p.read_bytes() for p in self.out.iterdir()})
+        self.assertEqual(pages_before, {str(p.relative_to(self.out)): p.read_bytes() for p in self.out.rglob("*") if p.is_file()})
 
     def test_matter_short_lock_is_not_held_across_model_call(self):
         outer = self
